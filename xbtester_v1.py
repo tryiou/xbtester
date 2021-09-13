@@ -59,6 +59,9 @@ class Dexinst:
                     dx_settings_save_new_address(c2, self.coin_address_list[c2], "B")
 
 
+if not os.path.isdir('logs'):
+    os.mkdir('logs')
+
 balances_logger = setup_logger(name="BALANCES_LOG", log_file='logs/balances.log', level=logging.INFO)
 trade_logger = setup_logger(name="TRADES_LOG", log_file='logs/trades.log', level=logging.INFO)
 blockcounts_logger = setup_logger(name='CC_BLOCKCOUNTS', log_file='logs/cc_blockcounts.log', level=logging.INFO)
@@ -626,7 +629,7 @@ def check_cloudchains_blockcounts():
                         msg = f"{key:<13} | {cc_blockcount:<8} | {'':<8} | {'':<8} | {'?'}"
                         result_list.append(msg)
         # for each in result_list:
-            # print(each)
+        # print(each)
         if ccblockcounts_logger_timer == 0 or time.time() - ccblockcounts_logger_timer > ccblockcounts_logger_loop_timer:
             for each in result_list:
                 blockcounts_logger.info(each)
