@@ -1,3 +1,6 @@
+import os
+if not os.path.isdir('logs'):
+    os.mkdir('logs')
 import random
 import time
 from datetime import datetime, timedelta
@@ -11,10 +14,8 @@ from ccxt_funcs_def import init_ccxt_instance, ccxt_call_fetch_order_book
 from logger import *
 import requests
 import zipfile
-import os
 import logging
 import subprocess
-
 
 class Dexinst:
     def __init__(self, status):
@@ -59,8 +60,7 @@ class Dexinst:
                     dx_settings_save_new_address(c2, self.coin_address_list[c2], "B")
 
 
-if not os.path.isdir('logs'):
-    os.mkdir('logs')
+
 
 balances_logger = setup_logger(name="BALANCES_LOG", log_file='logs/balances.log', level=logging.INFO)
 trade_logger = setup_logger(name="TRADES_LOG", log_file='logs/trades.log', level=logging.INFO)
