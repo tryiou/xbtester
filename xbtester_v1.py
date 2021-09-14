@@ -1,4 +1,5 @@
 import os
+
 if not os.path.isdir('logs'):
     os.mkdir('logs')
 import random
@@ -7,8 +8,6 @@ from datetime import datetime, timedelta
 # from pydub import AudioSegment
 # from pydub.playback import play
 import config
-import dxbottools_A
-import dxbottools_B
 import ws_client
 from ccxt_funcs_def import init_ccxt_instance, ccxt_call_fetch_order_book
 from logger import *
@@ -16,6 +15,8 @@ import requests
 import zipfile
 import logging
 import subprocess
+import xb_func_defs as xb
+
 
 class Dexinst:
     def __init__(self, status):
@@ -27,39 +28,32 @@ class Dexinst:
         self.coin_address_list = {}
 
     def get_addresses(self, c1, c2):
-        global xbridge_call_count_A, xbridge_call_count_B
         if "master" in self.status:
             if c1 in config.dx_addresses_A:
                 self.coin_address_list[c1] = config.dx_addresses_A[c1]
             else:
                 if c1 not in self.coin_address_list:
-                    self.coin_address_list[c1] = dxbottools_A.getnewtokenadress(c1)[0]
-                    xbridge_call_count_A += 1
+                    self.coin_address_list[c1] = xb.getnewtokenadress("A", c1)[0]
                     dx_settings_save_new_address(c1, self.coin_address_list[c1], "A")
             if c2 in config.dx_addresses_A:
                 self.coin_address_list[c2] = config.dx_addresses_A[c2]
             else:
                 if c2 not in self.coin_address_list:
-                    self.coin_address_list[c2] = dxbottools_A.getnewtokenadress(c2)[0]
-                    xbridge_call_count_A += 1
+                    self.coin_address_list[c2] = xb.getnewtokenadress("A", c2)[0]
                     dx_settings_save_new_address(c2, self.coin_address_list[c2], "A")
         if "slave" in self.status:
             if c1 in config.dx_addresses_B:
                 self.coin_address_list[c1] = config.dx_addresses_B[c1]
             else:
                 if c1 not in self.coin_address_list:
-                    self.coin_address_list[c1] = dxbottools_B.getnewtokenadress(c1)[0]
-                    xbridge_call_count_B += 1
+                    self.coin_address_list[c1] = xb.getnewtokenadress("B", c1)[0]
                     dx_settings_save_new_address(c1, self.coin_address_list[c1], "B")
             if c2 in config.dx_addresses_B:
                 self.coin_address_list[c2] = config.dx_addresses_B[c2]
             else:
                 if c2 not in self.coin_address_list:
-                    self.coin_address_list[c2] = dxbottools_B.getnewtokenadress(c2)[0]
-                    xbridge_call_count_B += 1
+                    self.coin_address_list[c2] = xb.getnewtokenadress("B", c2)[0]
                     dx_settings_save_new_address(c2, self.coin_address_list[c2], "B")
-
-
 
 
 balances_logger = setup_logger(name="BALANCES_LOG", log_file='logs/balances.log', level=logging.INFO)
@@ -107,11 +101,11 @@ coin1coin2_cexprice = None
 flush_timer = None
 max_delay_initialized = 120
 try:
-    print("dxloadxbridgeconf A:", dxbottools_A.rpc_connection.dxloadxbridgeconf())
-    print("getnetworkinfo A:\n", dxbottools_A.rpc_connection.getnetworkinfo())
+    print("dxloadxbridgeconf A:", xb.dxloadxbridgeconf("A"))
+    print("getnetworkinfo A:\n", xb.getnetworkinfo("A"))
     xbridge_call_count_A += 2
-    print("dxloadxbridgeconf B:", dxbottools_B.rpc_connection.dxloadxbridgeconf())
-    print("getnetworkinfo B:\n", dxbottools_B.rpc_connection.getnetworkinfo())
+    print("dxloadxbridgeconf B:", xb.dxloadxbridgeconf("B"))
+    print("getnetworkinfo B:\n", xb.getnetworkinfo("A"))
     xbridge_call_count_B += 2
 except Exception as e:
     print(e)
@@ -227,11 +221,11 @@ def get_pair_usd_volume(c1, c2):
     else:
         coin2_r_usd = scrap_price_cmc(c2)
         coin2_r = coin2_r_usd / btcusd_r
-    res = dxbottools_A.rpc_connection.dxgetorderfills(c1, c2, True)
-    xbridge_call_count_A += 1
+    res = xb.dxgetorderfills("A", c1, c2, True)
+    
     if len(res) == 0:
-        res = dxbottools_B.rpc_connection.dxgetorderfills(c1, c2, True)
-        xbridge_call_count_B += 1
+        res = xb.dxgetorderfills("B", c1, c2, True)
+        
         if len(res) == 0:
             return 0, 0
     total_coin1 = 0
@@ -262,16 +256,9 @@ def update_dex_bals(display=False):
     global xbridge_call_count_A, xbridge_call_count_B
     global log_bal_timer
     log_bal_delay = 60
-    master_o.balances = dxbottools_A.rpc_connection.dxGetTokenBalances()
-    xbridge_call_count_A += 1
-    slave_o.balances = dxbottools_B.rpc_connection.dxGetTokenBalances()
-    xbridge_call_count_B += 1
+    master_o.balances = xb.dxGetTokenBalances("A")
+    slave_o.balances = xb.dxGetTokenBalances("B")
     total = merge_two_dicts(master_o.balances, slave_o.balances)
-    if display:
-        print(datetime.now().strftime('%Y-%m-%d_%H:%M:%S'), )
-        print("MASTER", sorted(master_o.balances.items()), "fee_to_burn:", config.fee_to_burn['A'])
-        print("SLAVE", sorted(slave_o.balances.items()), "fee_to_burn:", config.fee_to_burn['B'])
-        print("TOTAL", sorted(total.items()), "fee_to_burn:", config.fee_to_burn['A'] + config.fee_to_burn['B'])
     if not log_bal_timer or time.time() - log_bal_timer > log_bal_delay:
         balances_logger.critical("** BALANCE UPDATE **")
         balances_logger.info(sorted(master_o.balances.items()))
@@ -290,24 +277,14 @@ def wait_sequence(order_id, side, new_timer):
         new_max_delay = 60 * 2
     i_counter = 0
     cancel = False
-    if side == "A":
-        order_data = dxbottools_A.getorderstatus(order_id)
-        xbridge_call_count_A += 1
-    elif side == "B":
-        order_data = dxbottools_B.getorderstatus(order_id)
-        xbridge_call_count_B += 1
+    order_data = xb.getorderstatus(side, order_id)
     while 'code' in order_data:
         if time.time() - new_timer > new_max_delay:
             cancel = True
             break
         i_counter += 1
         time.sleep(0.5)
-        if side == "A":
-            order_data = dxbottools_A.getorderstatus(order_id)
-            xbridge_call_count_A += 1
-        elif side == "B":
-            order_data = dxbottools_B.getorderstatus(order_id)
-            xbridge_call_count_B += 1
+        order_data = xb.getorderstatus(side, order_id)
         if i_counter % 10 == 0:
             print("order_data_" + side + ":\n", order_data)
     i_counter = 0
@@ -318,12 +295,7 @@ def wait_sequence(order_id, side, new_timer):
             break
         i_counter += 1
         time.sleep(0.5)
-        if side == "A":
-            order_data = dxbottools_A.getorderstatus(order_id)
-            xbridge_call_count_A += 1
-        elif side == "B":
-            order_data = dxbottools_B.getorderstatus(order_id)
-            xbridge_call_count_B += 1
+        order_data = xb.getorderstatus(side, order_id)
         if timer_print == 0 or time.time() - timer_print > 10:
             print("order_data_" + side + ": " + order_data['status'])
             timer_print = time.time()
@@ -345,14 +317,8 @@ def wait_created_order(order_id, side=None):
         if not cancel_b:
             cancel_a = wait_sequence(order_id, "A", new_timer)
     if cancel_a or cancel_b:
-        if side == "A":
-            print(dxbottools_A.cancelorder(order_id))
-            xbridge_call_count_A += 1
-            msg = "stuck on 'new', A.cancelling: " + order_id
-        elif side == "B":
-            print(dxbottools_B.cancelorder(order_id))
-            xbridge_call_count_B += 1
-            msg = "stuck on 'new', B.cancelling: " + order_id
+        print(xb.cancelorder(side, order_id))
+        msg = "stuck on 'new', " + side + ".cancelling: " + order_id
         # print(msg)
         trade_logger.critical(msg)
         return False
@@ -370,24 +336,22 @@ def check_status_fail(status):
 
 def cancel_all_open_orders():
     global xbridge_call_count_A, xbridge_call_count_B
-    res_a = dxbottools_A.getopenorders()
-    xbridge_call_count_A += 1
+    res_a = xb.getopenorders("A")
+    
     for order in res_a:
         msg = "A.CANCELLING:\n", order["id"]
         # print(msg)
         trade_logger.critical(msg)
         # print(x)
-        dxbottools_A.cancelorder(order['id'])
-        xbridge_call_count_A += 1
+        xb.cancelorder("A", order['id'])
         time.sleep(1)
-    res_b = dxbottools_B.getopenorders()
-    xbridge_call_count_B += 1
+    res_b = xb.getopenorders("B")
     for order in res_b:
         msg = "B.CANCELLING:\n", order["id"]
         # print(msg)
         trade_logger.critical(msg)
-        dxbottools_B.cancelorder(order['id'])
-        xbridge_call_count_B += 1
+        xb.cancelorder("B", order['id'])
+        
         time.sleep(1)
 
 
@@ -530,10 +494,8 @@ def calc_order_data(coin1, coin2):
 
 def check_coins_exist(coin_list):
     global xbridge_call_count_A, xbridge_call_count_B
-    tokens_A = dxbottools_A.rpc_connection.dxGetLocalTokens()
-    xbridge_call_count_A += 1
-    tokens_B = dxbottools_B.rpc_connection.dxGetLocalTokens()
-    xbridge_call_count_B += 1
+    tokens_A = xb.dxGetLocalTokens("A")
+    tokens_B = xb.dxGetLocalTokens("B")
     check_A = any(item in coin_list for item in tokens_A)
     check_B = any(item in coin_list for item in tokens_B)
     if check_A and check_B:
@@ -544,7 +506,6 @@ def check_coins_exist(coin_list):
 
 def scrap_price_cmc(coin):
     price_url = "https://coinmarketcap.com/currencies/" + coin.lower() + "/"
-    # print(price_url)
     coin_data = requests.get(price_url).text
     sep1 = coin_data.find('","price":') + 10
     sep2 = coin_data.find(',"priceCurrency"')
@@ -580,7 +541,6 @@ def check_cloudchains_blockcounts():
         date = now.strftime("%Y-%m-%d %H:%M:%S")
         print(date)
         msg = f"{'blockcounts:':<13} | {'  CC':<8} | {'CHAINZ':<8} | {'OTHER':<8} | {'VALID?'}"
-        # print('-------------------------------------------------------')
         result_list = []
         result_list.append(msg)
         result_list.append('-------------------------------------------------------')
@@ -628,13 +588,10 @@ def check_cloudchains_blockcounts():
                     if key != 'POLIS':
                         msg = f"{key:<13} | {cc_blockcount:<8} | {'':<8} | {'':<8} | {'?'}"
                         result_list.append(msg)
-        # for each in result_list:
-        # print(each)
         if ccblockcounts_logger_timer == 0 or time.time() - ccblockcounts_logger_timer > ccblockcounts_logger_loop_timer:
             for each in result_list:
                 blockcounts_logger.info(each)
             ccblockcounts_logger_timer = time.time()
-        # print("done")
 
 
 def get_xbp2p_logs(start_date, end_date, id="", status=""):
@@ -704,10 +661,8 @@ def main():
             check_cloudchains_blockcounts()
         if not flush_timer or time.time() - flush_timer > flush_delay:
             print("flushing canceled orders")
-            dxbottools_A.rpc_connection.dxFlushCancelledOrders(0)
-            xbridge_call_count_A += 1
-            dxbottools_B.rpc_connection.dxFlushCancelledOrders(0)
-            xbridge_call_count_B += 1
+            xb.dxFlushCancelledOrders("A")
+            xb.dxFlushCancelledOrders("B")
             flush_timer = time.time()
         random.shuffle(markets)
         for market in markets:
@@ -727,13 +682,11 @@ def main():
                 # FLIP PAIRS RANDOMLY!
                 coin1 = market[1]
                 coin2 = market[0]
-                max_order_size_coin1 = size_max[coin1]
                 master_o.get_addresses(coin1, coin2)
                 slave_o.get_addresses(coin1, coin2)
             else:
                 coin1 = market[0]
                 coin2 = market[1]
-                max_order_size_coin1 = size_max[coin1]
                 master_o.get_addresses(coin1, coin2)
                 slave_o.get_addresses(coin1, coin2)
             usd_vol, usd_vol_s2 = get_pair_usd_volume(coin1, coin2)
@@ -782,26 +735,18 @@ def main():
                                           coin1] + ", " + coin2 + ", " + str(taker_amount) + ", " + \
                                       master_o.coin_address_list[
                                           coin2] + " )"
-                            # print(msg)
-                            # exit()
                             trade_logger.critical(msg)
                             if config.test_partial and config.test_mode:
-                                # dxMakePartialOrder SYS 1 SVTbaYZ8oApVn3uNyimst3GKyvvfzXQgdK LTC 0.1 LVvFhzRoMRGTtGihHp7jVew3YoZRX8y35Z 0.2 true
-                                maker_order = dxbottools_A.rpc_connection.dxMakePartialOrder(coin1, maker_amount,
-                                                                                             master_o.coin_address_list[
-                                                                                                 coin1],
-                                                                                             coin2, taker_amount,
-                                                                                             master_o.coin_address_list[
-                                                                                                 coin2], partial_amount,
-                                                                                             False)
+                                maker_order = xb.dxMakePartialOrder("A", coin1, maker_amount,
+                                                                    master_o.coin_address_list[coin1],
+                                                                    coin2, taker_amount,
+                                                                    master_o.coin_address_list[coin2],
+                                                                    partial_amount, False)
                             else:
-                                maker_order = dxbottools_A.rpc_connection.dxMakeOrder(coin1, maker_amount,
-                                                                                      master_o.coin_address_list[coin1],
-                                                                                      coin2,
-                                                                                      taker_amount,
-                                                                                      master_o.coin_address_list[coin2],
-                                                                                      'exact')
-                            xbridge_call_count_A += 1
+                                maker_order = xb.dxMakeOrder("A", coin1, maker_amount,
+                                                             master_o.coin_address_list[coin1],
+                                                             coin2, taker_amount,
+                                                             master_o.coin_address_list[coin2])
                             order_timer = time.time()
                             time.sleep(1)
                             if 'id' not in maker_order:
@@ -812,20 +757,16 @@ def main():
                                     coin2] + ", " + \
                                       slave_o.coin_address_list[coin1] + " )"
                                 trade_logger.critical(msg)
-                                taker_order = dxbottools_B.takeorder(maker_order['id'],
-                                                                     slave_o.coin_address_list[coin2],
-                                                                     slave_o.coin_address_list[coin1])
-                                # print(msg)
-                                print(taker_order)
-                                xbridge_call_count_B += 1
+                                taker_order = xb.dxTakeOrder("B", maker_order['id'],
+                                                             slave_o.coin_address_list[coin2],
+                                                             slave_o.coin_address_list[coin1])
+                                trade_logger.critical(taker_order)
                                 taking_timer = time.time()
                                 time.sleep(2)
                                 if 'code' in taker_order:
-                                    # print(taker_order)
                                     trade_logger.critical(taker_order)
                                 else:
-                                    taker_order = dxbottools_B.getorderstatus(maker_order['id'])
-                                    xbridge_call_count_B += 1
+                                    taker_order = xb.getorderstatus("B", maker_order['id'])
                                     counter = 0
                                     fail_open_count = 0
                                     done = 0
@@ -836,34 +777,29 @@ def main():
                                         if "open" in taker_order['status']:
                                             fail_open_count += 1
                                             if fail_open_count == 3:
-                                                dxbottools_A.cancelorder(maker_order['id'])
-                                                xbridge_call_count_A += 1
+                                                xb.cancelorder("A", maker_order['id'])
                                                 msg = "open while taken, A.cancel " + maker_order['id']
                                                 # print(msg)
                                                 trade_logger.critical(msg)
                                                 time.sleep(1)
-                                                maker_order = dxbottools_A.getorderstatus(maker_order['id'])
-                                                xbridge_call_count_B += 1
+                                                maker_order = xb.getorderstatus("A", maker_order['id'])
                                                 break
                                             time.sleep(0.5)
-                                            taker_order = dxbottools_B.takeorder(maker_order['id'],
-                                                                                 slave_o.coin_address_list[coin2],
-                                                                                 slave_o.coin_address_list[coin1])
-                                            print(taker_order)
+                                            taker_order = xb.dxTakeOrder("B", maker_order['id'],
+                                                                         slave_o.coin_address_list[coin2],
+                                                                         slave_o.coin_address_list[coin1])
                                             print(msg)
-                                            xbridge_call_count_B += 1
+                                            print(taker_order)
                                             time.sleep(0.5)
                                         elif "initialized" in taker_order['status']:
                                             if time.time() - taking_timer > max_delay_initialized:
-                                                dxbottools_A.cancelorder(maker_order['id'])
-                                                xbridge_call_count_A += 1
+                                                xb.cancelorder("A", maker_order['id'])
                                                 msg = "B.Taker status stuck on 'initialized', A.cancel " + maker_order[
                                                     'id']
                                                 # print(msg)
                                                 trade_logger.critical(msg)
                                                 time.sleep(1)
-                                                taker_order = dxbottools_B.getorderstatus(maker_order['id'])
-                                                xbridge_call_count_B += 1
+                                                taker_order = xb.getorderstatus("B", maker_order['id'])
                                                 break
                                         if display_timer == 0 or time.time() - display_timer > display_delay:
                                             print("in progress", taker_order['status'])
@@ -874,7 +810,6 @@ def main():
                                             done = 1
                                             update_fee_count('B')
                                             # play_my_sound(sound1)
-
                                             # CC API CHECK
                                             try:
                                                 process = subprocess.Popen(['python3', 'cc-api-check/src/run.py'],
@@ -884,7 +819,6 @@ def main():
                                             except Exception as e:
                                                 print(e)
                                             # CC API CHECK
-
                                         elif check_status_fail(taker_order['status']):
                                             msg = "error with order: " + maker_order['id'] + ", " + taker_order[
                                                 'status']
@@ -897,11 +831,9 @@ def main():
                                                                taker_order['status'])
                                             except Exception as e:
                                                 print(e)
-
                                             exit()
                                         time.sleep(1)
-                                        taker_order = dxbottools_B.getorderstatus(maker_order['id'])
-                                        xbridge_call_count_B += 1
+                                        taker_order = xb.getorderstatus("B", maker_order['id'])
                                     msg = "done! " + maker_order['id'] + ", " + taker_order['status']
                                     # print(msg)
                                     trade_logger.critical(msg)
@@ -911,12 +843,10 @@ def main():
                                         get_xbp2p_logs(start_date, end_date, maker_order['id'], taker_order['status'])
                                     except Exception as e:
                                         print(e)
-
                                 # MASTER SELL COIN1 FOR COIN2, SLAVE BUY COIN1 WITH COIN 2
                             else:
                                 print('wait_created_order(' + maker_order['id'] + ', "A") FAILED')
                                 end_date = datetime.now()
-
                                 try:
                                     get_xbp2p_logs(start_date, end_date, maker_order['id'], "son")
                                 except Exception as e:
@@ -931,7 +861,6 @@ def main():
                                 break
                             else:
                                 print("check_coins_exist A B ok!")
-
                             if config.test_partial and config.test_mode:
                                 partial_amount = "{:.6f}".format(float(maker_amount) / 2)
                                 msg = "B.DxMakePartialOrder( " + coin1 + ", " + str(maker_amount) + ", " + \
@@ -952,21 +881,16 @@ def main():
                             if config.test_partial and config.test_mode:
                                 # dxMakePartialOrder SYS 1 SVTbaYZ8oApVn3uNyimst3GKyvvfzXQgdK LTC 0.1 LVvFhzRoMRGTtGihHp7jVew3YoZRX8y35Z 0.2 true
                                 partial_amount = "{:.6f}".format(float(maker_amount) / 2)
-                                maker_order = dxbottools_B.rpc_connection.dxMakePartialOrder(coin1, maker_amount,
-                                                                                             master_o.coin_address_list[
-                                                                                                 coin1],
-                                                                                             coin2, taker_amount,
-                                                                                             master_o.coin_address_list[
-                                                                                                 coin2], partial_amount,
-                                                                                             False)
+
+                                maker_order = xb.dxMakePartialOrder("B", coin1, maker_amount,
+                                                                    master_o.coin_address_list[coin1],
+                                                                    coin2, taker_amount,
+                                                                    master_o.coin_address_list[coin2],
+                                                                    partial_amount, False)
                             else:
-                                maker_order = dxbottools_B.rpc_connection.dxMakeOrder(coin1, maker_amount,
-                                                                                      slave_o.coin_address_list[coin1],
-                                                                                      coin2,
-                                                                                      taker_amount,
-                                                                                      slave_o.coin_address_list[coin2],
-                                                                                      'exact')
-                            xbridge_call_count_B += 1
+
+                                maker_order = xb.dxMakeOrder("B", coin1, maker_amount, slave_o.coin_address_list[coin1],
+                                                             coin2, taker_amount, slave_o.coin_address_list[coin2])
                             order_timer = time.time()
                             time.sleep(1)
                             if 'id' not in maker_order:
@@ -978,19 +902,18 @@ def main():
                                     coin2] + ", " + \
                                       master_o.coin_address_list[coin1] + " )"
                                 trade_logger.critical(msg)
-                                taker_order = dxbottools_A.takeorder(maker_order['id'],
-                                                                     master_o.coin_address_list[coin2],
-                                                                     master_o.coin_address_list[coin1])
+
+                                taker_order = xb.dxTakeOrder("A", maker_order['id'], master_o.coin_address_list[coin2],
+                                                             master_o.coin_address_list[coin1])
                                 # print(msg)
-                                print(taker_order)
-                                xbridge_call_count_A += 1
+                                trade_logger.critical(taker_order)
                                 taking_timer = time.time()
                                 time.sleep(2)
                                 if 'code' in taker_order:
                                     # print(taker_order)
                                     trade_logger.critical(taker_order)
                                 else:
-                                    taker_order = dxbottools_A.getorderstatus(maker_order['id'])
+                                    taker_order = xb.getorderstatus("A", maker_order['id'])
                                     counter = 0
                                     fail_open_count = 0
                                     done = 0
@@ -1001,33 +924,29 @@ def main():
                                         if "open" in taker_order['status']:
                                             fail_open_count += 1
                                             if fail_open_count == 3:
-                                                dxbottools_B.cancelorder(maker_order['id'])
+                                                xb.cancelorder("B", maker_order['id'])
                                                 msg = "open while taken, B.cancel " + maker_order['id']
                                                 # print(msg)
                                                 trade_logger.critical(msg)
                                                 time.sleep(1)
-                                                taker_order = dxbottools_A.getorderstatus(maker_order['id'])
+                                                taker_order = xb.getorderstatus("A", maker_order['id'])
                                                 break
                                             time.sleep(0.5)
-                                            taker_order = dxbottools_A.takeorder(maker_order['id'],
-                                                                                 master_o.coin_address_list[
-                                                                                     coin2],
-                                                                                 master_o.coin_address_list[
-                                                                                     coin1])
+                                            taker_order = xb.dxTakeOrder("A", maker_order['id'],
+                                                                         master_o.coin_address_list[coin2],
+                                                                         master_o.coin_address_list[coin1])
                                             print(msg)
                                             print(taker_order)
                                             time.sleep(0.5)
                                         elif "initialized" in taker_order['status']:
                                             if time.time() - taking_timer > max_delay_initialized:
-                                                dxbottools_B.cancelorder(maker_order['id'])
-                                                xbridge_call_count_A += 1
+                                                xb.cancelorder("B", maker_order['id'])
                                                 msg = "A.Taker status stuck on 'initialized', B.cancel " + maker_order[
                                                     'id']
                                                 # print(msg)
                                                 trade_logger.critical(msg)
                                                 time.sleep(1)
-                                                taker_order = dxbottools_A.getorderstatus(maker_order['id'])
-                                                xbridge_call_count_B += 1
+                                                taker_order = xb.getorderstatus("A", maker_order['id'])
                                                 break
                                         if display_timer == 0 or time.time() - display_timer > display_delay:
                                             print("in progress", taker_order['status'])
@@ -1038,7 +957,6 @@ def main():
                                             done = 1
                                             update_fee_count('A')
                                             # play_my_sound(sound1)
-
                                             # CC API CHECK
                                             try:
                                                 process = subprocess.Popen(['python3', 'cc-api-check/src/run.py'],
@@ -1048,7 +966,6 @@ def main():
                                             except Exception as e:
                                                 print(e)
                                             # CC API CHECK
-
                                         elif check_status_fail(taker_order['status']):
                                             msg = "error with order: " + maker_order['id'] + ", " + taker_order[
                                                 'status']
@@ -1061,10 +978,9 @@ def main():
                                                                taker_order['status'])
                                             except Exception as e:
                                                 print(e)
-
                                             exit()
                                         time.sleep(1)
-                                        taker_order = dxbottools_A.getorderstatus(maker_order['id'])
+                                        taker_order = xb.getorderstatus("A", maker_order['id'])
                                     msg = "done!" + maker_order['id'] + ", " + taker_order['status']
                                     # print(msg)
                                     trade_logger.critical(msg)
@@ -1081,7 +997,6 @@ def main():
                                     get_xbp2p_logs(start_date, end_date, maker_order['id'], 'son')
                                 except Exception as e:
                                     print(e)
-
                                 # SLAVE SELL COIN1 FOR COIN2, MASTER BUY COIN1 WITH COIN 2
                     else:
                         print("order_data_bol", order_data_bol)
@@ -1089,8 +1004,8 @@ def main():
                     print("COIN MISSING IN BALANCES!!", master_o.balances, slave_o.balances)
                     fail_count += 1
                     if fail_count % 10 == 0:
-                        print("dxloadxbridgeconf A", dxbottools_A.rpc_connection.dxloadxbridgeconf())
-                        print("dxloadxbridgeconf B", dxbottools_B.rpc_connection.dxloadxbridgeconf())
+                        print("dxloadxbridgeconf A", xb.dxloadxbridgeconf("A"))
+                        print("dxloadxbridgeconf B", xb.dxloadxbridgeconf("B"))
                 if org_trade_counter != trade_counter:
                     msg = "order_exec_time: " + str(total_trade_time[-1]) + ", average: " + str(
                         sum(total_trade_time) / len(total_trade_time)) + ", trade_counter: " + str(trade_counter)
