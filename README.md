@@ -8,7 +8,7 @@
 # enter dir:
     cd xbtester
 # edit config file with text editor:
-    config.py # set BLOCKNET WALLET A & B RPC, and edit t_markets,n_markets and associated options, no need setting addresses, request at                   # start
+    config.py # set BLOCKNET WALLET A & B RPC, and edit t_markets,n_markets and associated options, no need setting addresses, request at start
 # optionnal: create and activate python3 venv
 # install requirement with:
     pip install -r requirements.txt # pip3 on ubuntu18+
