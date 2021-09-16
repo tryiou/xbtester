@@ -1,4 +1,5 @@
 import dxbottools_A, dxbottools_B
+import time
 
 max_count = 10
 
@@ -19,6 +20,7 @@ def dxloadxbridgeconf(side):
                 result = dxbottools_B.rpc_connection.dxloadxbridgeconf()
         except Exception as e:
             print(type(e), e)
+            time.sleep(4 * count)
         else:
             return result
 
