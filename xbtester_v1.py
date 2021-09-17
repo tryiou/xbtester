@@ -252,7 +252,7 @@ def update_dex_bals(display=False):
     slave_o.balances = xb.dxGetTokenBalances("B")
     total = merge_two_dicts(master_o.balances, slave_o.balances)
     if not log_bal_timer or time.time() - log_bal_timer > log_bal_delay:
-        balances_logger.critical("** BALANCE UPDATE **")
+        balances_logger.info("** BALANCE UPDATE **")
         balances_logger.info(sorted(master_o.balances.items()))
         balances_logger.info(sorted(slave_o.balances.items()))
         balances_logger.info(sorted(total.items()))
@@ -330,7 +330,7 @@ def cancel_all_open_orders():
     for order in res_a:
         msg = "A.CANCELLING:\n", order["id"]
         # print(msg)
-        trade_logger.critical(msg)
+        trade_logger.info(msg)
         # print(x)
         xb.cancelorder("A", order['id'])
         time.sleep(1)
@@ -338,7 +338,7 @@ def cancel_all_open_orders():
     for order in res_b:
         msg = "B.CANCELLING:\n", order["id"]
         # print(msg)
-        trade_logger.critical(msg)
+        trade_logger.info(msg)
         xb.cancelorder("B", order['id'])
 
         time.sleep(1)
@@ -650,8 +650,8 @@ def main():
             print(e)
         # CC API CHECK
         iteration += 1
-        if iteration % 5 == 0 or iteration == 1:
-            check_cloudchains_blockcounts()
+        # if iteration % 5 == 0 or iteration == 1:
+        check_cloudchains_blockcounts()
         if not flush_timer or time.time() - flush_timer > flush_delay:
             print("flushing canceled orders")
             xb.dxFlushCancelledOrders("A")
@@ -690,7 +690,7 @@ def main():
                         check_s1 = check_side_bal('side1', coin1, coin2)
                         check_s2 = check_side_bal('side2', coin1, coin2)
                         if check_s1 and check_s2:
-                            if config.fee_to_burn['A'] > config.fee_to_burn['B'] and random.randrange(0, 2) == 1:
+                            if config.fee_to_burn['A'] < config.fee_to_burn['B'] and random.randrange(0, 2) == 1:
                                 check_s1 = False
                                 print("check_s1 modifier => false")
                         print("order_data_bol:\n   ", order_data_bol, "check_side_bal('side1')", check_s1,
@@ -727,7 +727,7 @@ def main():
                                                              master_o.coin_address_list[coin1],
                                                              coin2, taker_amount,
                                                              master_o.coin_address_list[coin2])
-                            trade_logger.critical(msg)
+                            trade_logger.info(msg)
                             order_timer = time.time()
                             time.sleep(1)
                             if 'id' not in maker_order:
@@ -737,11 +737,10 @@ def main():
                                 msg = "B.DxTakeOrder( " + maker_order['id'] + ", " + slave_o.coin_address_list[
                                     coin2] + ", " + \
                                       slave_o.coin_address_list[coin1] + " )"
-                                trade_logger.critical(msg)
+                                trade_logger.info(msg)
                                 taker_order = xb.dxTakeOrder("B", maker_order['id'],
                                                              slave_o.coin_address_list[coin2],
                                                              slave_o.coin_address_list[coin1])
-                                # trade_logger.critical(taker_order)
                                 taking_timer = time.time()
                                 time.sleep(2)
                                 if 'code' in taker_order:
@@ -814,7 +813,7 @@ def main():
                                         maker_order = xb.getorderstatus("A", maker_order['id'])
                                         taker_order = xb.getorderstatus("B", maker_order['id'])
                                     msg = "done! " + maker_order['id'] + ", " + taker_order['status']
-                                    trade_logger.critical(msg)
+                                    trade_logger.info(msg)
                                     time.sleep(2)
                                     end_date = datetime.now()
                                     try:
@@ -862,7 +861,7 @@ def main():
                                           coin2] + " )"
                                 maker_order = xb.dxMakeOrder("B", coin1, maker_amount, slave_o.coin_address_list[coin1],
                                                              coin2, taker_amount, slave_o.coin_address_list[coin2])
-                            trade_logger.critical(msg)
+                            trade_logger.info(msg)
                             # MOD SIDE2
                             order_timer = time.time()
                             time.sleep(1)
@@ -873,11 +872,10 @@ def main():
                                 msg = "A.DxTakeOrder( " + maker_order['id'] + ", " + master_o.coin_address_list[
                                     coin2] + ", " + \
                                       master_o.coin_address_list[coin1] + " )"
-                                trade_logger.critical(msg)
+                                trade_logger.info(msg)
 
                                 taker_order = xb.dxTakeOrder("A", maker_order['id'], master_o.coin_address_list[coin2],
                                                              master_o.coin_address_list[coin1])
-                                # trade_logger.critical(taker_order)
                                 taking_timer = time.time()
                                 time.sleep(2)
                                 if 'code' in taker_order:
@@ -951,7 +949,7 @@ def main():
                                         taker_order = xb.getorderstatus("A", maker_order['id'])
                                         maker_order = xb.getorderstatus("B", maker_order['id'])
                                     msg = "done!" + maker_order['id'] + ", " + taker_order['status']
-                                    trade_logger.critical(msg)
+                                    trade_logger.info(msg)
                                     time.sleep(2)
                                     end_date = datetime.now()
                                     try:
@@ -978,7 +976,7 @@ def main():
                     msg = "order_exec_time: " + str(total_trade_time[-1]) + ", average: " + str(
                         sum(total_trade_time) / len(total_trade_time)) + ", trade_counter: " + str(trade_counter)
                     # print(msg)
-                    trade_logger.critical(msg)
+                    trade_logger.info(msg)
                     sleep_timer = time.time()
                     trade_delay_current = random.uniform(trade_delay * 0.85, trade_delay * 1.15)
                     if test_mode is False and trade_counter == trade_to_do or test_mode is True and trade_counter == test_trade_to_do:
