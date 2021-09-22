@@ -235,6 +235,8 @@ def get_pair_usd_volume(c1, c2):
             elif each['taker'] == c1 and each['maker'] == c2:
                 total_coin1 += float(each['taker_size'])
                 total_coin2 += float(each['maker_size'])
+    # print(total_coin1, total_coin2, coin1_r, coin2_r, btcusd_r)
+    # exit()
     c1_usd_v = total_coin1 * coin1_r * btcusd_r
     c2_usd_v = total_coin2 * coin2_r * btcusd_r
     return c1_usd_v, c2_usd_v
@@ -674,7 +676,7 @@ def main():
                 master_o.get_addresses(coin1, coin2)
                 slave_o.get_addresses(coin1, coin2)
             usd_vol, usd_vol_s2 = get_pair_usd_volume(coin1, coin2)
-            if usd_vol < usd_volume_target:
+            if usd_vol < usd_volume_target or test_mode and trade_counter != trade_to_do:
                 print("rand:", rand, coin1 + "/" + coin2, "usd_vol:", usd_vol, "usd_vol_s2:", usd_vol_s2, "target:",
                       usd_volume_target)
                 taking_timer = 0
@@ -689,10 +691,10 @@ def main():
                     if order_data_bol:
                         check_s1 = check_side_bal('side1', coin1, coin2)
                         check_s2 = check_side_bal('side2', coin1, coin2)
-                        if check_s1 and check_s2:
-                            if config.fee_to_burn['A'] < config.fee_to_burn['B'] and random.randrange(0, 2) == 1:
-                                check_s1 = False
-                                print("check_s1 modifier => false")
+                        # if check_s1 and check_s2:
+                        # if config.fee_to_burn['A'] > config.fee_to_burn['B'] and random.randrange(0, 2) == 1:
+                        #     check_s1 = False
+                        #     print("check_s1 modifier => false")
                         print("order_data_bol:\n   ", order_data_bol, "check_side_bal('side1')", check_s1,
                               "check_side_bal('side2')", check_s2)
                         if check_s1 and config.fee_to_burn['B'] >= 0.0151:
@@ -728,6 +730,7 @@ def main():
                                                              coin2, taker_amount,
                                                              master_o.coin_address_list[coin2])
                             trade_logger.info(msg)
+                            print(maker_order)
                             order_timer = time.time()
                             time.sleep(1)
                             if 'id' not in maker_order:
@@ -742,7 +745,7 @@ def main():
                                                              slave_o.coin_address_list[coin2],
                                                              slave_o.coin_address_list[coin1])
                                 taking_timer = time.time()
-                                time.sleep(2)
+                                time.sleep(1)
                                 if 'code' in taker_order:
                                     trade_logger.critical(taker_order)
                                 else:
@@ -841,16 +844,15 @@ def main():
                             if config.test_partial and config.test_mode:
                                 partial_amount = "{:.6f}".format(float(maker_amount) / 2)
                                 msg = "B.DxMakePartialOrder( " + coin1 + ", " + str(maker_amount) + ", " + \
-                                      master_o.coin_address_list[
-                                          coin1] + ", " + coin2 + ", " + str(taker_amount) + ", " + \
-                                      master_o.coin_address_list[
-                                          coin2] + ", " + partial_amount + ", " + "False )"
+                                      slave_o.coin_address_list[coin1] + ", " + coin2 + ", " + str(
+                                    taker_amount) + ", " + \
+                                      slave_o.coin_address_list[coin2] + ", " + partial_amount + ", " + "False )"
                                 partial_amount = "{:.6f}".format(float(maker_amount) / 2)
 
                                 maker_order = xb.dxMakePartialOrder("B", coin1, maker_amount,
-                                                                    master_o.coin_address_list[coin1],
+                                                                    slave_o.coin_address_list[coin1],
                                                                     coin2, taker_amount,
-                                                                    master_o.coin_address_list[coin2],
+                                                                    slave_o.coin_address_list[coin2],
                                                                     partial_amount, False)
 
                             else:
@@ -862,6 +864,7 @@ def main():
                                 maker_order = xb.dxMakeOrder("B", coin1, maker_amount, slave_o.coin_address_list[coin1],
                                                              coin2, taker_amount, slave_o.coin_address_list[coin2])
                             trade_logger.info(msg)
+                            print(maker_order)
                             # MOD SIDE2
                             order_timer = time.time()
                             time.sleep(1)
@@ -877,7 +880,7 @@ def main():
                                 taker_order = xb.dxTakeOrder("A", maker_order['id'], master_o.coin_address_list[coin2],
                                                              master_o.coin_address_list[coin1])
                                 taking_timer = time.time()
-                                time.sleep(2)
+                                time.sleep(1)
                                 if 'code' in taker_order:
                                     trade_logger.critical(taker_order)
                                 else:
