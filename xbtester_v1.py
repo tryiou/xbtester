@@ -19,8 +19,8 @@ import xb_func_defs as xb
 
 
 class Dexinst:
-    def __init__(self, status):
-        self.status = status
+    def __init__(self, side):
+        self.side = side
         self.balances = -1
         self.open_orders = []
         # self.coin1_address = None
@@ -28,7 +28,7 @@ class Dexinst:
         self.coin_address_list = {}
 
     def get_addresses(self, c1, c2):
-        if "master" in self.status:
+        if "A" in self.side:
             if c1 in config.dx_addresses_A:
                 self.coin_address_list[c1] = config.dx_addresses_A[c1]
             else:
@@ -41,7 +41,7 @@ class Dexinst:
                 if c2 not in self.coin_address_list:
                     self.coin_address_list[c2] = xb.getnewtokenadress("A", c2)[0]
                     dx_settings_save_new_address(c2, self.coin_address_list[c2], "A")
-        if "slave" in self.status:
+        if "B" in self.side:
             if c1 in config.dx_addresses_B:
                 self.coin_address_list[c1] = config.dx_addresses_B[c1]
             else:
@@ -83,8 +83,8 @@ else:
 xbridge_callcount_loop_timer = 60
 ccblockcounts_logger_timer = 0
 ccblockcounts_logger_loop_timer = 60 * 5
-master_o = Dexinst("master")
-slave_o = Dexinst("slave")
+instance_A = Dexinst("A")
+instance_B = Dexinst("B")
 ccxt_bittrex = init_ccxt_instance("bittrex", "global.bittrex.com")
 trade_counter = 0
 total_trade_time = []
@@ -250,13 +250,13 @@ def merge_two_dicts(x, y):
 def update_dex_bals(display=False):
     global log_bal_timer
     log_bal_delay = 60
-    master_o.balances = xb.dxGetTokenBalances("A")
-    slave_o.balances = xb.dxGetTokenBalances("B")
-    total = merge_two_dicts(master_o.balances, slave_o.balances)
+    instance_A.balances = xb.dxGetTokenBalances("A")
+    instance_B.balances = xb.dxGetTokenBalances("B")
+    total = merge_two_dicts(instance_A.balances, instance_B.balances)
     if not log_bal_timer or time.time() - log_bal_timer > log_bal_delay:
         balances_logger.info("** BALANCE UPDATE **")
-        balances_logger.info(sorted(master_o.balances.items()))
-        balances_logger.info(sorted(slave_o.balances.items()))
+        balances_logger.info(sorted(instance_A.balances.items()))
+        balances_logger.info(sorted(instance_B.balances.items()))
         balances_logger.info(sorted(total.items()))
         balances_logger.info("fee_to_burn A: " + str(config.fee_to_burn['A']) + " fee_to_burn B: " + str(
             config.fee_to_burn['B']) + " total fee_to_burn:" + str(config.fee_to_burn['A'] + config.fee_to_burn['B']))
@@ -354,30 +354,30 @@ def check_side_bal(side, coin1, coin2):
         if config.fee_to_burn['B'] < 0.0151:
             print("out of fee_to_burn['B'] =", config.fee_to_burn['B'])
             return False
-        if float(master_o.balances[coin1]) > maker_a and float(master_o.balances['Wallet']) > 0.05:
+        if float(instance_A.balances[coin1]) > maker_a and float(instance_A.balances['Wallet']) > 0.05:
             # BALANCE MASTER OK
-            # print("   side1 master bal", coin1, "ok")
-            if float(slave_o.balances[coin2]) > taker_a:
-                # print("   side1 slave bal", coin2, "ok, TRUE")
+            # print("   side1", instance_A.side, "bal", coin1, "ok")
+            if float(instance_B.balances[coin2]) > taker_a:
+                # print("   side1", instance_B.side, "bal", coin2, "ok, TRUE")
                 return True
             else:
-                print("   side1 slave bal", coin2, "too low", slave_o.balances[coin2], "|", taker_a)
+                print("   side1", instance_B.side, "bal", coin2, "too low", instance_B.balances[coin2], "|", taker_a)
         else:
-            print("   side1 master bal", coin1, "too low", master_o.balances[coin1], "|", maker_a, "FALSE1")
+            print("   side1", instance_A.side, "bal", coin1, "too low", instance_A.balances[coin1], "|", maker_a,
+                  "FALSE1")
         return False
     elif side == "side2":
         if config.fee_to_burn['A'] < 0.0151:
             print("out of fee_to_burn['A'] =", config.fee_to_burn['A'])
             return False
-        if float(slave_o.balances[coin1]) > maker_a and float(slave_o.balances['Wallet']) > 0.05:
-            # print("   side2 slave bal", coin1, "ok")
-            if float(master_o.balances[coin2]) > taker_a:
-                # print("   side2 master bal", coin2, "ok, TRUE")
+        if float(instance_B.balances[coin1]) > maker_a and float(instance_B.balances['Wallet']) > 0.05:
+            if float(instance_A.balances[coin2]) > taker_a:
                 return True
             else:
-                print("   side2 master bal", coin2, "too low", master_o.balances[coin2], "|", taker_a)
+                print("   side2", instance_A.side, "bal", coin2, "too low", instance_A.balances[coin2], "|", taker_a)
         else:
-            print("   side2 slave bal", coin1, "too low", slave_o.balances[coin1], "|", maker_a, "FALSE2")
+            print("   side2", instance_B.side, "bal", coin1, "too low", instance_B.balances[coin1], "|", maker_a,
+                  "FALSE2")
         return False
 
 
@@ -397,28 +397,29 @@ def calc_order_data(coin1, coin2):
         coin2_rate = coin2_r_usd / btcusd_r
     coin1coin2_cexprice = coin1_rate / coin2_rate
     order_price = coin1coin2_cexprice * random.uniform((1 + price_multi - 0.02), (1 + price_multi + 0.02))
-    master_bal_c1 = float(master_o.balances[coin1])
-    master_bal_c2 = float(master_o.balances[coin2])
-    slave_bal_c1 = float(slave_o.balances[coin1])
-    slave_bal_c2 = float(slave_o.balances[coin2])
+    instance_A_bal_c1 = float(instance_A.balances[coin1])
+    instance_A_bal_c2 = float(instance_A.balances[coin2])
+    instance_B_bal_c1 = float(instance_B.balances[coin1])
+    instance_B_bal_c2 = float(instance_B.balances[coin2])
     c_order_size_coin1 = -1
     if test_mode is False:
-        if master_bal_c1 > size_min[coin1] and slave_bal_c2 > size_min[coin2]:
-            if master_bal_c1 > size_max[coin1]:
+        if instance_A_bal_c1 > size_min[coin1] and instance_B_bal_c2 > size_min[coin2]:
+            if instance_A_bal_c1 > size_max[coin1]:
                 c_order_size_coin1 = random.uniform(size_min[coin1], size_max[coin1])
             else:
-                c_order_size_coin1 = random.uniform(size_min[coin1], master_bal_c1 * 0.97)
-        elif master_bal_c2 > size_min[coin2] and slave_bal_c1 > size_min[coin1]:
-            if slave_bal_c1 > size_max[coin1]:
+                c_order_size_coin1 = random.uniform(size_min[coin1], instance_A_bal_c1 * 0.97)
+        elif instance_A_bal_c2 > size_min[coin2] and instance_B_bal_c1 > size_min[coin1]:
+            if instance_B_bal_c1 > size_max[coin1]:
                 c_order_size_coin1 = random.uniform(size_min[coin1], size_max[coin1])
             else:
-                c_order_size_coin1 = random.uniform(size_min[coin1], slave_bal_c1 * 0.97)
+                c_order_size_coin1 = random.uniform(size_min[coin1], instance_B_bal_c1 * 0.97)
         else:
             print(
                 "calc_order_data\n   " + coin1 + "/" + coin2 + ": insufficient balances A B\n   size_min[" + coin1 + "]:",
-                size_min[coin1], "master_bal_c1:", master_bal_c1, "slave_bal_c1:", slave_bal_c1,
-                "\n   size_min[" + coin2 + "]:", size_min[coin2], "slave_bal_c2:", slave_bal_c2, "master_bal_c2:",
-                master_bal_c2)
+                size_min[coin1], "instance_A_bal_c1:", instance_A_bal_c1, "instance_B_bal_c1:", instance_B_bal_c1,
+                "\n   size_min[" + coin2 + "]:", size_min[coin2], "instance_B_bal_c2:", instance_B_bal_c2,
+                "instance_A_bal_c2:",
+                instance_A_bal_c2)
             return False
         maker_amount = "{:.6f}".format(c_order_size_coin1)
         taker_amount = "{:.6f}".format(c_order_size_coin1 * order_price)
@@ -430,47 +431,49 @@ def calc_order_data(coin1, coin2):
             if count > 2:
                 print("   count>2")
                 return False
-            if master_bal_c1 * 0.98 > float(maker_amount) > size_min[coin1]:
-                if slave_bal_c2 * 0.98 > float(taker_amount):
+            if instance_A_bal_c1 * 0.98 > float(maker_amount) > size_min[coin1]:
+                if instance_B_bal_c2 * 0.98 > float(taker_amount):
                     print("   ok")
                     return True
                 else:
-                    print("   slave bal.c2", coin2, "too low:", slave_o.balances[coin2], taker_amount)
-                    if slave_bal_c2 > size_min[coin2]:
+                    print("  ", instance_B.side, "bal.c2", coin2, "too low:", instance_B.balances[coin2], taker_amount)
+                    if instance_B_bal_c2 > size_min[coin2]:
                         org_maker = maker_amount
                         org_taker = taker_amount
-                        new_amount = slave_bal_c2 * 0.97
+                        new_amount = instance_B_bal_c2 * 0.97
                         taker_amount = "{:.6f}".format(random.uniform(size_min[coin2], new_amount))
                         maker_amount = "{:.6f}".format(float(taker_amount) / order_price)
                         print("   resize maker amount maker from:", org_maker, "to:", maker_amount, "taker from:",
                               org_taker, "to:", taker_amount)
                     else:
-                        print("   resize, slave bal.c2 too low", coin2, slave_bal_c2 * 0.97,
+                        print("   resize,", instance_B.side, "bal.c2 too low", coin2, instance_B_bal_c2 * 0.97,
                               size_min[coin2])
                         # return False
             else:
-                print("   master bal.c1", coin1, "too low: bal", master_bal_c1, "maker_amount", maker_amount,
+                print("  ", instance_A.side, "bal.c1", coin1, "too low: bal", instance_A_bal_c1, "maker_amount",
+                      maker_amount,
                       "size_min[" + coin1 + "]", size_min[coin1])
             # else:
-            if slave_bal_c1 * 0.98 > float(maker_amount) > size_min[coin1]:
-                if master_bal_c2 * 0.98 > float(taker_amount):
+            if instance_B_bal_c1 * 0.98 > float(maker_amount) > size_min[coin1]:
+                if instance_A_bal_c2 * 0.98 > float(taker_amount):
                     print("   ok")
                     return True
                 else:
-                    print("   master bal.c2", coin2, "too low:", master_o.balances[coin2], taker_amount)
-                    if master_bal_c2 > size_min[coin2]:
+                    print("  ", instance_A.side, "bal.c2", coin2, "too low:", instance_A.balances[coin2], taker_amount)
+                    if instance_A_bal_c2 > size_min[coin2]:
                         org_maker = maker_amount
                         org_taker = taker_amount
-                        new_amount = master_bal_c2 * 0.97
+                        new_amount = instance_A_bal_c2 * 0.97
                         taker_amount = "{:.6f}".format(random.uniform(size_min[coin2], new_amount))
                         maker_amount = "{:.6f}".format(float(taker_amount) / order_price)
                         print("   resize maker amount maker from:", org_maker, "to:", maker_amount, "taker from:",
                               org_taker, "to:", taker_amount)
                     else:
-                        print("   resize, master bal.c2 too low", coin2, master_bal_c2 * 0.97,
+                        print("   resize,", instance_A.side, "bal.c2 too low", coin2, instance_A_bal_c2 * 0.97,
                               size_min[coin2])
             else:
-                print("   slave bal.c1", coin1, "too low: bal", slave_bal_c1, "maker_amount", maker_amount,
+                print("  ", instance_B.side, "bal.c1", coin1, "too low: bal", instance_B_bal_c1, "maker_amount",
+                      maker_amount,
                       "size_min[" + coin1 + "]", size_min[coin1])
     elif test_mode is True:
         if coin1 in config.test_amount and coin2 in config.test_amount:
@@ -668,13 +671,13 @@ def main():
                 # FLIP PAIRS RANDOMLY!
                 coin1 = market[1]
                 coin2 = market[0]
-                master_o.get_addresses(coin1, coin2)
-                slave_o.get_addresses(coin1, coin2)
+                instance_A.get_addresses(coin1, coin2)
+                instance_B.get_addresses(coin1, coin2)
             else:
                 coin1 = market[0]
                 coin2 = market[1]
-                master_o.get_addresses(coin1, coin2)
-                slave_o.get_addresses(coin1, coin2)
+                instance_A.get_addresses(coin1, coin2)
+                instance_B.get_addresses(coin1, coin2)
             usd_vol, usd_vol_s2 = get_pair_usd_volume(coin1, coin2)
             if usd_vol < usd_volume_target or test_mode and trade_counter != trade_to_do:
                 print("rand:", rand, coin1 + "/" + coin2, "usd_vol:", usd_vol, "usd_vol_s2:", usd_vol_s2, "target:",
@@ -682,8 +685,8 @@ def main():
                 taking_timer = 0
                 loop_timer = time.time()
                 update_dex_bals()
-                if coin1 in master_o.balances and coin2 in master_o.balances and coin1 in slave_o.balances and \
-                        coin2 in slave_o.balances:
+                if coin1 in instance_A.balances and coin2 in instance_A.balances and coin1 in instance_B.balances and \
+                        coin2 in instance_B.balances:
                     maker_amount = None
                     taker_amount = None
                     order_price = None
@@ -691,10 +694,10 @@ def main():
                     if order_data_bol:
                         check_s1 = check_side_bal('side1', coin1, coin2)
                         check_s2 = check_side_bal('side2', coin1, coin2)
-                        # if check_s1 and check_s2:
-                        # if config.fee_to_burn['A'] > config.fee_to_burn['B'] and random.randrange(0, 2) == 1:
-                        #     check_s1 = False
-                        #     print("check_s1 modifier => false")
+                        if check_s1 and check_s2:
+                            if config.fee_to_burn['A'] > config.fee_to_burn['B'] and random.randrange(0, 2) == 1:
+                                check_s1 = False
+                                print("check_s1 modifier => false")
                         print("order_data_bol:\n   ", order_data_bol, "check_side_bal('side1')", check_s1,
                               "check_side_bal('side2')", check_s2)
                         if check_s1 and config.fee_to_burn['B'] >= 0.0151:
@@ -710,25 +713,25 @@ def main():
                             if config.test_partial and config.test_mode:
                                 partial_amount = "{:.6f}".format(float(maker_amount) / 2)
                                 msg = "A.DxMakePartialOrder( " + coin1 + ", " + str(maker_amount) + ", " + \
-                                      master_o.coin_address_list[
+                                      instance_A.coin_address_list[
                                           coin1] + ", " + coin2 + ", " + str(taker_amount) + ", " + \
-                                      master_o.coin_address_list[
+                                      instance_A.coin_address_list[
                                           coin2] + ", " + partial_amount + ", " + "False )"
                                 maker_order = xb.dxMakePartialOrder("A", coin1, maker_amount,
-                                                                    master_o.coin_address_list[coin1],
+                                                                    instance_A.coin_address_list[coin1],
                                                                     coin2, taker_amount,
-                                                                    master_o.coin_address_list[coin2],
+                                                                    instance_A.coin_address_list[coin2],
                                                                     partial_amount, False)
                             else:
                                 msg = "A.DxMakeOrder( " + coin1 + ", " + str(maker_amount) + ", " + \
-                                      master_o.coin_address_list[
+                                      instance_A.coin_address_list[
                                           coin1] + ", " + coin2 + ", " + str(taker_amount) + ", " + \
-                                      master_o.coin_address_list[
+                                      instance_A.coin_address_list[
                                           coin2] + " )"
                                 maker_order = xb.dxMakeOrder("A", coin1, maker_amount,
-                                                             master_o.coin_address_list[coin1],
+                                                             instance_A.coin_address_list[coin1],
                                                              coin2, taker_amount,
-                                                             master_o.coin_address_list[coin2])
+                                                             instance_A.coin_address_list[coin2])
                             trade_logger.info(msg)
                             print(maker_order)
                             order_timer = time.time()
@@ -737,13 +740,13 @@ def main():
                                 print("error with order\n", maker_order)
                                 exit()
                             if wait_created_order(maker_order['id'], "A"):
-                                msg = "B.DxTakeOrder( " + maker_order['id'] + ", " + slave_o.coin_address_list[
+                                msg = "B.DxTakeOrder( " + maker_order['id'] + ", " + instance_B.coin_address_list[
                                     coin2] + ", " + \
-                                      slave_o.coin_address_list[coin1] + " )"
+                                      instance_B.coin_address_list[coin1] + " )"
                                 trade_logger.info(msg)
                                 taker_order = xb.dxTakeOrder("B", maker_order['id'],
-                                                             slave_o.coin_address_list[coin2],
-                                                             slave_o.coin_address_list[coin1])
+                                                             instance_B.coin_address_list[coin2],
+                                                             instance_B.coin_address_list[coin1])
                                 taking_timer = time.time()
                                 time.sleep(1)
                                 if 'code' in taker_order:
@@ -781,8 +784,8 @@ def main():
                                                 maker_order = xb.getorderstatus("A", maker_order['id'])
                                                 break
                                             time.sleep(0.5)
-                                            xb.dxTakeOrder("B", maker_order['id'], slave_o.coin_address_list[coin2],
-                                                           slave_o.coin_address_list[coin1])
+                                            xb.dxTakeOrder("B", maker_order['id'], instance_B.coin_address_list[coin2],
+                                                           instance_B.coin_address_list[coin1])
                                             print(msg)
                                             time.sleep(0.5)
                                         elif "finished" in taker_order['status']:
@@ -844,25 +847,26 @@ def main():
                             if config.test_partial and config.test_mode:
                                 partial_amount = "{:.6f}".format(float(maker_amount) / 2)
                                 msg = "B.DxMakePartialOrder( " + coin1 + ", " + str(maker_amount) + ", " + \
-                                      slave_o.coin_address_list[coin1] + ", " + coin2 + ", " + str(
+                                      instance_B.coin_address_list[coin1] + ", " + coin2 + ", " + str(
                                     taker_amount) + ", " + \
-                                      slave_o.coin_address_list[coin2] + ", " + partial_amount + ", " + "False )"
+                                      instance_B.coin_address_list[coin2] + ", " + partial_amount + ", " + "False )"
                                 partial_amount = "{:.6f}".format(float(maker_amount) / 2)
 
                                 maker_order = xb.dxMakePartialOrder("B", coin1, maker_amount,
-                                                                    slave_o.coin_address_list[coin1],
+                                                                    instance_B.coin_address_list[coin1],
                                                                     coin2, taker_amount,
-                                                                    slave_o.coin_address_list[coin2],
+                                                                    instance_B.coin_address_list[coin2],
                                                                     partial_amount, False)
 
                             else:
                                 msg = "B.DxMakeOrder( " + coin1 + ", " + str(maker_amount) + ", " + \
-                                      slave_o.coin_address_list[
+                                      instance_B.coin_address_list[
                                           coin1] + ", " + coin2 + ", " + str(taker_amount) + ", " + \
-                                      slave_o.coin_address_list[
+                                      instance_B.coin_address_list[
                                           coin2] + " )"
-                                maker_order = xb.dxMakeOrder("B", coin1, maker_amount, slave_o.coin_address_list[coin1],
-                                                             coin2, taker_amount, slave_o.coin_address_list[coin2])
+                                maker_order = xb.dxMakeOrder("B", coin1, maker_amount,
+                                                             instance_B.coin_address_list[coin1],
+                                                             coin2, taker_amount, instance_B.coin_address_list[coin2])
                             trade_logger.info(msg)
                             print(maker_order)
                             # MOD SIDE2
@@ -872,13 +876,14 @@ def main():
                                 print("error with order\n", maker_order)
                                 exit()
                             if wait_created_order(maker_order['id'], "B"):
-                                msg = "A.DxTakeOrder( " + maker_order['id'] + ", " + master_o.coin_address_list[
+                                msg = "A.DxTakeOrder( " + maker_order['id'] + ", " + instance_A.coin_address_list[
                                     coin2] + ", " + \
-                                      master_o.coin_address_list[coin1] + " )"
+                                      instance_A.coin_address_list[coin1] + " )"
                                 trade_logger.info(msg)
 
-                                taker_order = xb.dxTakeOrder("A", maker_order['id'], master_o.coin_address_list[coin2],
-                                                             master_o.coin_address_list[coin1])
+                                taker_order = xb.dxTakeOrder("A", maker_order['id'],
+                                                             instance_A.coin_address_list[coin2],
+                                                             instance_A.coin_address_list[coin1])
                                 taking_timer = time.time()
                                 time.sleep(1)
                                 if 'code' in taker_order:
@@ -917,8 +922,8 @@ def main():
                                                 maker_order = xb.getorderstatus("B", maker_order['id'])
                                                 break
                                             time.sleep(0.5)
-                                            xb.dxTakeOrder("A", maker_order['id'], master_o.coin_address_list[coin2],
-                                                           master_o.coin_address_list[coin1])
+                                            xb.dxTakeOrder("A", maker_order['id'], instance_A.coin_address_list[coin2],
+                                                           instance_A.coin_address_list[coin1])
                                             print(msg)
                                             time.sleep(0.5)
                                         elif "finished" in taker_order['status']:
@@ -970,7 +975,7 @@ def main():
                     else:
                         print("order_data_bol", order_data_bol)
                 else:
-                    print("COIN MISSING IN BALANCES!!", master_o.balances, slave_o.balances)
+                    print("COIN MISSING IN BALANCES!!", instance_A.balances, instance_B.balances)
                     fail_count += 1
                     if fail_count % 10 == 0:
                         print("dxloadxbridgeconf A", xb.dxloadxbridgeconf("A"))

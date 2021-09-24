@@ -1,5 +1,4 @@
 import asyncio
-import json
 import pickle
 import time
 from datetime import datetime
@@ -147,14 +146,15 @@ async def echo(ws, path):
         connected.remove(ws)
 
 
-print("WS Server listening on Port", port)
-ccxt_cex = init_ccxt_instance("bittrex", "global.bittrex.com")
-total_timer = time.time()
-ccxt_call_count = 0
-total_call_count = 0
-bal_timer = None
-bal = None
+
 if __name__ == '__main__':
+    print("WS Server listening on Port", port)
+    ccxt_cex = init_ccxt_instance("bittrex", "global.bittrex.com")
+    total_timer = time.time()
+    ccxt_call_count = 0
+    total_call_count = 0
+    bal_timer = None
+    bal = None
     my_pairs_list = []
     connected = set()
     start_server = websockets.serve(echo, "localhost", port)
