@@ -123,6 +123,7 @@ def cancelorder(side, id):
         except Exception as e:
             print(type(e), e)
         else:
+            print(result)
             return result
 
 

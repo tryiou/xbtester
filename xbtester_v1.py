@@ -56,6 +56,7 @@ class Dexinst:
                     dx_settings_save_new_address(c2, self.coin_address_list[c2], "B")
 
 
+session = requests.Session()
 balances_logger = setup_logger(name="BALANCES_LOG", log_file='logs/balances.log', level=logging.INFO)
 trade_logger = setup_logger(name="TRADES_LOG", log_file='logs/trades.log', level=logging.INFO)
 blockcounts_logger = setup_logger(name='CC_BLOCKCOUNTS', log_file='logs/cc_blockcounts.log', level=logging.INFO)
@@ -97,14 +98,6 @@ order_price = None
 coin1coin2_cexprice = None
 flush_timer = None
 max_delay_initialized = 120
-try:
-    print("dxloadxbridgeconf A:", xb.dxloadxbridgeconf("A"))
-    print("getnetworkinfo A:\n", xb.getnetworkinfo("A"))
-    print("dxloadxbridgeconf B:", xb.dxloadxbridgeconf("B"))
-    print("getnetworkinfo B:\n", xb.getnetworkinfo("A"))
-except Exception as e:
-    print(e)
-    exit()
 
 
 def dx_settings_save_new_address(coin, address, side):
@@ -512,84 +505,80 @@ def scrap_price_cmc(coin):
     return price
 
 
-def check_cloudchains_blockcounts():
+def rpc_call(method, params, port=443, url="https://127.0.0.1"):
+    url = url + ':' + str(port)
+    payload = {"jsonrpc": "2.0",
+               "method": method,
+               "params": params,
+               "id": 0}
+    headers = {'Content-type': 'application/json'}
+    response = session.post(url, json=payload, headers=headers)
+    return response.json()
+
+
+def check_cloudchains_blockcounts(ignore_timer=False):
     if cc_on:
-        global ccblockcounts_logger_timer
-        chainz_url = "https://chainz.cryptoid.info/explorer/api.dws?q=summary"
-        cc_url = 'https://plugin-api.core.cloudchainsinc.com/height'
-        dogecoin_url = 'https://dogechain.info/chain/Dogecoin/q/getblockcount'
-        rvn_url = 'https://rvn.cryptoscope.io/api/getblockcount/'
-        bch_url = 'https://api.fullstack.cash/v5/blockchain/getBlockCount'
-        xsn_url = 'https://explorer.masternodes.online/currencies/XSN/'
-        xsn = requests.get(xsn_url).text
-        xsn_separator1 = xsn.find('Last block: ') + 12
-        xsn_separator2 = xsn.find('<br />', xsn_separator1)
-        xsn_blockcount = int(xsn[xsn_separator1:xsn_separator2].replace(',', ''))
-        rvn_blockcount = int(requests.get(rvn_url).json()['blockcount'])
-        doge_blockcount = int(requests.get(dogecoin_url).json())
-        bch_blockcount = int(requests.get(bch_url).json())
-        cc_blockcounts_dict = requests.get(cc_url).json()
-        # print(cc_blockcounts_dict)
-        # exit()
-        chainz_summary = requests.get(chainz_url).json()
-        now = datetime.now()
-        date = now.strftime("%Y-%m-%d %H:%M:%S")
-        print(date)
-        msg = f"{'blockcounts:':<13} | {'  CC':<8} | {'CHAINZ':<8} | {'OTHER':<8} | {'VALID?'}"
-        result_list = []
-        result_list.append(msg)
-        result_list.append('-------------------------------------------------------')
-        for key in cc_blockcounts_dict['result']:
-            msg = None
-            if cc_blockcounts_dict['result'][key] is None:
-                print(key, cc_blockcounts_dict['result'][key])
-            else:
-                cc_blockcount = int(cc_blockcounts_dict['result'][key])
+        print("check_cloudchains_blockcounts")
+        try:
+            global ccblockcounts_logger_timer
+            chainz_url = "https://chainz.cryptoid.info/explorer/api.dws?q=summary"
+            cc_url = 'https://plugin-api.core.cloudchainsinc.com/height'
+            dogecoin_url = 'https://dogechain.info/chain/Dogecoin/q/getblockcount'
+            rvn_url = 'https://rvn.cryptoscope.io/api/getblockcount/'
+            bch_url = 'https://api.fullstack.cash/v5/blockchain/getBlockCount'
+            xsn_url = 'https://explorer.masternodes.online/currencies/XSN/'
+            xsn = requests.get(xsn_url).text
+            xsn_separator1 = xsn.find('Last block: ') + 12
+            xsn_separator2 = xsn.find('<br />', xsn_separator1)
+            external = {}
+            external['xsn'] = int(xsn[xsn_separator1:xsn_separator2].replace(',', ''))
+            external['rvn'] = int(requests.get(rvn_url).json()['blockcount'])
+            external['doge'] = int(requests.get(dogecoin_url).json())
+            external['bch'] = int(requests.get(bch_url).json())
+            cc_blockcounts_dict = requests.get(cc_url).json()
+            chainz_summary = requests.get(chainz_url).json()
+            now = datetime.now()
+            date = now.strftime("%Y-%m-%d %H:%M:%S")
+            print(date)
+            data_list = []
+            for key in cc_blockcounts_dict['result']:
+                msg = None
+                try:
+                    cc_blockcount = rpc_call(method="getblockcount", params=[key],
+                                             url="https://plugin-api.core.cloudchainsinc.com")['result']
+                except Exception as e:
+                    print(type(e), e, "cc_blockcount error")
+                    cc_blockcount = None
+                valid = False
                 if key.lower() in chainz_summary:
                     chainz_blockcount = chainz_summary[key.lower()]['height']
-                    if chainz_blockcount + 3 >= cc_blockcount >= chainz_blockcount - 3:
+                    if isinstance(cc_blockcount,
+                                  int) and chainz_blockcount + 3 >= cc_blockcount >= chainz_blockcount - 3:
                         valid = True
-                    else:
-                        valid = False
-                    msg = f"{key:<13} | {cc_blockcount:<8} | {chainz_blockcount:<8} | {'':<8} | {valid}"
-                    result_list.append(msg)
+                    dict = {'coin': key, 'cc_blockcount': cc_blockcount, 'external': chainz_blockcount,
+                            'valid': valid}
+                    data_list.append(dict)
+                elif key.lower() in external:
+                    ext_blockcount = external[key.lower()]
+                    if isinstance(cc_blockcount, int) and ext_blockcount + 3 >= cc_blockcount >= ext_blockcount - 3:
+                        valid = True
+                    dict = {'coin': key, 'cc_blockcount': cc_blockcount, 'external': ext_blockcount, 'valid': valid}
+                    # print(dict)
+                    data_list.append(dict)
                 else:
-                    if key == 'DOGE':
-                        if doge_blockcount + 3 >= cc_blockcount >= doge_blockcount - 3:
-                            valid = True
-                        else:
-                            valid = False
-                        msg = f"{key:<13} | {cc_blockcount:<8} | {'':<8} | {doge_blockcount:<8} | {valid}"
-                        result_list.append(msg)
-                    elif key == 'RVN':
-                        if rvn_blockcount + 3 >= cc_blockcount >= rvn_blockcount - 3:
-                            valid = True
-                        else:
-                            valid = False
-                        msg = f"{key:<13} | {cc_blockcount:<8} | {'':<8} | {rvn_blockcount:<8} | {valid}"
-                        result_list.append(msg)
-                    elif key == 'BCH':
-                        if bch_blockcount + 3 >= cc_blockcount >= bch_blockcount - 3:
-                            valid = True
-                        else:
-                            valid = False
-                        msg = f"{key:<13} | {cc_blockcount:<8} | {'':<8} | {bch_blockcount:<8} | {valid}"
-                        result_list.append(msg)
-                    elif key == 'XSN':
-                        if xsn_blockcount + 3 >= cc_blockcount >= xsn_blockcount - 3:
-                            valid = True
-                        else:
-                            valid = False
-                        msg = f"{key:<13} | {cc_blockcount:<8} | {'':<8} | {xsn_blockcount:<8} | {valid}"
-                        result_list.append(msg)
-                    else:
-                        if key != 'POLIS':
-                            msg = f"{key:<13} | {cc_blockcount:<8} | {'':<8} | {'':<8} | {'?'}"
-                            result_list.append(msg)
-        if ccblockcounts_logger_timer == 0 or time.time() - ccblockcounts_logger_timer > ccblockcounts_logger_loop_timer:
-            for each in result_list:
-                blockcounts_logger.info(each)
-            ccblockcounts_logger_timer = time.time()
+                    dict = {'coin': key, 'cc_blockcount': cc_blockcount, 'external': 'None', 'valid': '?'}
+                    data_list.append(dict)
+            if ignore_timer or ccblockcounts_logger_timer == 0 or time.time() - ccblockcounts_logger_timer > ccblockcounts_logger_loop_timer:
+                msg = f"{' coin':<7} | {'cc_height':<9} | {'external':<9} | {'valid'}"
+                blockcounts_logger.info(msg)
+                blockcounts_logger.info('-' * 40)
+                for each in sorted(data_list, key=lambda k: k['coin']):
+                    msg = f"{' ' + each['coin']:<7} | {str(each['cc_blockcount']):<9} | {each['external']:<9} | {each['valid']}"
+                    blockcounts_logger.info(msg)
+                ccblockcounts_logger_timer = time.time()
+            # exit()
+        except Exception as e:
+            print(type(e), e, "check_cloudchains_blockcounts error")
 
 
 def get_xbp2p_logs(start_date, end_date, id="", status=""):
@@ -643,6 +632,16 @@ def get_xbp2p_logs(start_date, end_date, id="", status=""):
 
 def main():
     global trade_counter, fail_count, flush_timer, maker_amount, taker_amount, order_price
+
+    try:
+        print("dxloadxbridgeconf A:", xb.dxloadxbridgeconf("A"))
+        print("getnetworkinfo A:\n", xb.getnetworkinfo("A"))
+        print("dxloadxbridgeconf B:", xb.dxloadxbridgeconf("B"))
+        print("getnetworkinfo B:\n", xb.getnetworkinfo("A"))
+    except Exception as e:
+        print(e)
+        exit()
+
     iteration = 0
     update_dex_bals(display=True)
     while 1:
