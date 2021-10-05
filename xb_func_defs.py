@@ -1,4 +1,5 @@
-import dxbottools_A, dxbottools_B
+import dxbottools_A
+import dxbottools_B
 import time
 
 max_count = 10
@@ -19,10 +20,56 @@ def dxloadxbridgeconf(side):
             if side == "B":
                 result = dxbottools_B.rpc_connection.dxloadxbridgeconf()
         except Exception as e:
-            print(type(e), e)
+            print("dxloadxbridgeconf", type(e), e)
             time.sleep(4 * count)
         else:
             return result
+
+
+def xrGetBlockCount(side, coin, node_count=1):
+    done = False
+    count = 0
+    result = None
+    max_count = 2
+    while not done:
+        count += 1
+        if count == max_count:
+            print(side, "xrGetBlockCount max_count reached")
+            return None
+        try:
+            if side == "A":
+                result = dxbottools_A.rpc_connection.xrGetBlockCount(coin, node_count)
+            if side == "B":
+                result = dxbottools_B.rpc_connection.xrGetBlockCount(coin, node_count)
+            test = result['reply']
+        except Exception as e:
+            print("xrGetBlockCount", side, coin, node_count, '\n', type(e), e)
+            time.sleep(4 * count)
+        else:
+            return result['reply']
+
+
+def xrGetNetworkServices(side):
+    done = False
+    count = 0
+    result = None
+    max_count = 2
+    while not done:
+        count += 1
+        if count == max_count:
+            # print(side, "xrGetNetworkServices max_count reached")
+            return None
+        try:
+            if side == "A":
+                result = dxbottools_A.rpc_connection.xrGetNetworkServices()
+            if side == "B":
+                result = dxbottools_B.rpc_connection.xrGetNetworkServices()
+            test = result['reply']
+        except Exception as e:
+            print("xrGetNetworkServices", side, type(e), e)
+            time.sleep(4 * count)
+        else:
+            return result['reply']
 
 
 def getnetworkinfo(side):
@@ -40,13 +87,13 @@ def getnetworkinfo(side):
             if side == "B":
                 result = dxbottools_B.rpc_connection.getnetworkinfo()
         except Exception as e:
-            print(type(e), e)
+            print("getnetworkinfo", type(e), e)
         else:
             return result
 
 
 def dxgetorderfills(side, c1, c2, reverse: bool):
-    print("dxgetorderfills(", c1, c2, reverse, ")")
+    # print("dxgetorderfills(", c1, c2, reverse, ")")
     done = False
     count = 0
     result = None
@@ -61,7 +108,7 @@ def dxgetorderfills(side, c1, c2, reverse: bool):
             if side == "B":
                 result = dxbottools_B.rpc_connection.dxgetorderfills(c1, c2, reverse)
         except Exception as e:
-            print(type(e), e)
+            print("dxgetorderfills", type(e), e)
         else:
             return result
 
@@ -81,12 +128,12 @@ def dxGetTokenBalances(side):
             if side == "B":
                 result = dxbottools_B.rpc_connection.dxGetTokenBalances()
         except Exception as e:
-            print(type(e), e)
+            print("dxGetTokenBalances", type(e), e)
         else:
             return result
 
 
-def getorderstatus(side, id):
+def getorderstatus(side, order_id):
     done = False
     count = 0
     result = None
@@ -97,34 +144,42 @@ def getorderstatus(side, id):
             exit()
         try:
             if side == "A":
-                result = dxbottools_A.getorderstatus(id)
+                result = dxbottools_A.getorderstatus(order_id)
             if side == "B":
-                result = dxbottools_B.getorderstatus(id)
+                result = dxbottools_B.getorderstatus(order_id)
         except Exception as e:
-            print(type(e), e)
+            print("getorderstatus", type(e), e)
         else:
             return result
 
 
-def cancelorder(side, id):
+def cancelorder(side, order_id):
     done = False
     count = 0
     result = None
     while not done:
         count += 1
         if count == max_count:
-            print(side, "cancelorder max_count reached")
+            print("Failed cancelling", side, order_id)
             exit()
         try:
+            status = []
             if side == "A":
-                result = dxbottools_A.cancelorder(id)
-            if side == "B":
-                result = dxbottools_B.cancelorder(id)
+                result = dxbottools_A.cancelorder(order_id)
+                time.sleep(0.25)
+                status = dxbottools_A.getorderstatus(order_id)
+            elif side == "B":
+                result = dxbottools_B.cancelorder(order_id)
+                time.sleep(0.25)
+                status = dxbottools_B.getorderstatus(order_id)
+            if 'status' in status and "canceled" in status['status']:
+                done = True
+            else:
+                time.sleep(0.25)
         except Exception as e:
-            print(type(e), e)
-        else:
-            print(result)
-            return result
+            print("cancelorder", type(e), e)
+    # print(result)
+    return result
 
 
 def getopenorders(side):
@@ -162,7 +217,7 @@ def dxGetLocalTokens(side):
             if side == "B":
                 result = dxbottools_B.rpc_connection.dxGetLocalTokens()
         except Exception as e:
-            print(type(e), e)
+            print("dxGetLocalTokens", type(e), e)
         else:
             return result
 
@@ -182,7 +237,7 @@ def dxFlushCancelledOrders(side):
             if side == "B":
                 result = dxbottools_B.rpc_connection.dxFlushCancelledOrders(0)
         except Exception as e:
-            print(type(e), e)
+            print("dxFlushCancelledOrders", type(e), e)
         else:
             return result
 
@@ -192,9 +247,6 @@ def dxMakePartialOrder(side, coin1, maker_amount, maker_address, coin2, taker_am
     done = False
     count = 0
     result = None
-    # print(type(coin1), coin1, type(maker_amount), maker_amount, type(maker_address), maker_address, type(coin2), coin2,
-    #       type(taker_amount), taker_amount, type(taker_address), taker_address, type(partial_amount), partial_amount,
-    #       type(str(repost)), str(repost))
     while not done:
         count += 1
         if count == max_count:
@@ -214,7 +266,7 @@ def dxMakePartialOrder(side, coin1, maker_amount, maker_address, coin2, taker_am
                 print("dxMakePartialOrder(", side, coin1, maker_amount, maker_address, coin2, taker_amount,
                       taker_address,
                       partial_amount, repost, ")", )
-            print(type(e), e)
+            print("dxMakePartialOrder", type(e), e)
         else:
             return result
 
@@ -236,12 +288,12 @@ def dxMakeOrder(side, coin1, maker_amount, maker_address, coin2, taker_amount, t
                 result = dxbottools_B.rpc_connection.dxMakeOrder(coin1, maker_amount, maker_address,
                                                                  coin2, taker_amount, taker_address, 'exact')
         except Exception as e:
-            print(type(e), e)
+            print("dxMakeOrder", type(e), e)
         else:
             return result
 
 
-def dxTakeOrder(side, id, maker_address, taker_address):
+def dxTakeOrder(side, order_id, maker_address, taker_address):
     done = False
     count = 0
     result = None
@@ -252,11 +304,11 @@ def dxTakeOrder(side, id, maker_address, taker_address):
             exit()
         try:
             if side == "A":
-                result = dxbottools_A.takeorder(id, maker_address, taker_address)
+                result = dxbottools_A.takeorder(order_id, maker_address, taker_address)
             if side == "B":
-                result = dxbottools_B.takeorder(id, maker_address, taker_address)
+                result = dxbottools_B.takeorder(order_id, maker_address, taker_address)
         except Exception as e:
-            print(type(e), e)
+            print("dxTakeOrder", type(e), e)
         else:
             return result
 
@@ -276,6 +328,6 @@ def getnewtokenadress(side, coin):
             if side == "B":
                 result = dxbottools_B.getnewtokenadress(coin)
         except Exception as e:
-            print(type(e), e)
+            print("getnewtokenadress", type(e), e)
         else:
             return result

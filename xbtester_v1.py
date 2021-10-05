@@ -16,6 +16,8 @@ import zipfile
 import logging
 import subprocess
 import xb_func_defs as xb
+import yagmail
+import pickle
 
 
 class Dexinst:
@@ -61,6 +63,7 @@ balances_logger = setup_logger(name="BALANCES_LOG", log_file='logs/balances.log'
 trade_logger = setup_logger(name="TRADES_LOG", log_file='logs/trades.log', level=logging.INFO)
 blockcounts_logger = setup_logger(name='CC_BLOCKCOUNTS', log_file='logs/cc_blockcounts.log', level=logging.INFO)
 logging.basicConfig(level=logging.INFO)
+ccblockcounts_mail_delay = 60 * 60
 
 test_mode = config.test_mode
 test_trade_to_do = config.test_trade_to_do
@@ -94,6 +97,8 @@ fail_count = 0
 log_bal_timer = None
 maker_amount = None
 taker_amount = None
+maker_order = None
+taker_order = None
 order_price = None
 coin1coin2_cexprice = None
 flush_timer = None
@@ -240,7 +245,7 @@ def merge_two_dicts(x, y):
     return result
 
 
-def update_dex_bals(display=False):
+def update_dex_bals():
     global log_bal_timer
     log_bal_delay = 60
     instance_A.balances = xb.dxGetTokenBalances("A")
@@ -377,6 +382,9 @@ def check_side_bal(side, coin1, coin2):
 def calc_order_data(coin1, coin2):
     global order_price, maker_amount, taker_amount, coin1coin2_cexprice
     coin1coin2_cexprice = None
+    maker_amount = None
+    taker_amount = None
+    order_price = None
     btcusd_r = cex_get_btc_rate_from_orderbook("USD")
     if coin1 != 'DASH':
         coin1_rate = cex_get_btc_rate_from_orderbook(coin1)
@@ -394,7 +402,6 @@ def calc_order_data(coin1, coin2):
     instance_A_bal_c2 = float(instance_A.balances[coin2])
     instance_B_bal_c1 = float(instance_B.balances[coin1])
     instance_B_bal_c2 = float(instance_B.balances[coin2])
-    c_order_size_coin1 = -1
     if test_mode is False:
         if instance_A_bal_c1 > size_min[coin1] and instance_B_bal_c2 > size_min[coin2]:
             if instance_A_bal_c1 > size_max[coin1]:
@@ -499,6 +506,7 @@ def scrap_price_cmc(coin):
     if sep1 > 0 and sep2 > 0:
         price = float(coin_data[sep1:sep2])
     else:
+        price = None
         print("error with separators")
         exit()
     print(price)
@@ -517,71 +525,190 @@ def rpc_call(method, params, port=443, url="https://127.0.0.1"):
 
 
 def check_cloudchains_blockcounts(ignore_timer=False):
+    global ccblockcounts_logger_timer
+    block_tolerance = 10
     if cc_on:
+        active_xlite_coin = ["BLOCK", "BTC", "DASH", "DOGE", "LTC", "PIVX", "SYS"]
         print("check_cloudchains_blockcounts")
+        chainz_url = "https://chainz.cryptoid.info/explorer/api.dws?q=summary"
+        cc_url = 'https://plugin-api.core.cloudchainsinc.com/height'
+        external = {}
+        xrouter_services = xb.xrGetNetworkServices(side='A')['spvwallets']
+        xrouter_services = [word.replace('xr::', '') for word in xrouter_services]
+        xsn_url = 'https://explorer.masternodes.online/currencies/XSN/'
+        rvn_url = 'https://rvn.cryptoscope.io/api/getblockcount/'
+        dogecoin_url = 'https://dogechain.info/chain/Dogecoin/q/getblockcount'
+        bch_url = 'https://api.fullstack.cash/v5/blockchain/getBlockCount'
         try:
-            global ccblockcounts_logger_timer
-            chainz_url = "https://chainz.cryptoid.info/explorer/api.dws?q=summary"
-            cc_url = 'https://plugin-api.core.cloudchainsinc.com/height'
-            dogecoin_url = 'https://dogechain.info/chain/Dogecoin/q/getblockcount'
-            rvn_url = 'https://rvn.cryptoscope.io/api/getblockcount/'
-            bch_url = 'https://api.fullstack.cash/v5/blockchain/getBlockCount'
-            xsn_url = 'https://explorer.masternodes.online/currencies/XSN/'
             xsn = requests.get(xsn_url).text
             xsn_separator1 = xsn.find('Last block: ') + 12
             xsn_separator2 = xsn.find('<br />', xsn_separator1)
-            external = {}
             external['xsn'] = int(xsn[xsn_separator1:xsn_separator2].replace(',', ''))
-            external['rvn'] = int(requests.get(rvn_url).json()['blockcount'])
-            external['doge'] = int(requests.get(dogecoin_url).json())
-            external['bch'] = int(requests.get(bch_url).json())
-            cc_blockcounts_dict = requests.get(cc_url).json()
-            chainz_summary = requests.get(chainz_url).json()
-            now = datetime.now()
-            date = now.strftime("%Y-%m-%d %H:%M:%S")
-            print(date)
-            data_list = []
-            for key in cc_blockcounts_dict['result']:
-                msg = None
-                try:
-                    cc_blockcount = rpc_call(method="getblockcount", params=[key],
-                                             url="https://plugin-api.core.cloudchainsinc.com")['result']
-                except Exception as e:
-                    print(type(e), e, "cc_blockcount error")
-                    cc_blockcount = None
-                valid = False
-                if key.lower() in chainz_summary:
-                    chainz_blockcount = chainz_summary[key.lower()]['height']
-                    if isinstance(cc_blockcount,
-                                  int) and chainz_blockcount + 3 >= cc_blockcount >= chainz_blockcount - 3:
-                        valid = True
-                    dict = {'coin': key, 'cc_blockcount': cc_blockcount, 'external': chainz_blockcount,
-                            'valid': valid}
-                    data_list.append(dict)
-                elif key.lower() in external:
-                    ext_blockcount = external[key.lower()]
-                    if isinstance(cc_blockcount, int) and ext_blockcount + 3 >= cc_blockcount >= ext_blockcount - 3:
-                        valid = True
-                    dict = {'coin': key, 'cc_blockcount': cc_blockcount, 'external': ext_blockcount, 'valid': valid}
-                    # print(dict)
-                    data_list.append(dict)
-                else:
-                    dict = {'coin': key, 'cc_blockcount': cc_blockcount, 'external': 'None', 'valid': '?'}
-                    data_list.append(dict)
-            if ignore_timer or ccblockcounts_logger_timer == 0 or time.time() - ccblockcounts_logger_timer > ccblockcounts_logger_loop_timer:
-                msg = f"{' coin':<7} | {'cc_height':<9} | {'external':<9} | {'valid'}"
-                blockcounts_logger.info(msg)
-                blockcounts_logger.info('-' * 40)
-                for each in sorted(data_list, key=lambda k: k['coin']):
-                    msg = f"{' ' + each['coin']:<7} | {str(each['cc_blockcount']):<9} | {each['external']:<9} | {each['valid']}"
-                    blockcounts_logger.info(msg)
-                ccblockcounts_logger_timer = time.time()
-            # exit()
         except Exception as e:
-            print(type(e), e, "check_cloudchains_blockcounts error")
+            print("xsn", type(e), e)
+            external['xsn'] = None
+        try:
+            # print(requests.get(rvn_url).json())
+            external['rvn'] = int(requests.get(rvn_url).json()['blockcount'])
+        except Exception as e:
+            print("rvn", type(e), e)
+            external['rvn'] = None
+        try:
+            external['doge'] = int(requests.get(dogecoin_url).json())
+        except Exception as e:
+            print("doge", type(e), e)
+            external['doge'] = None
+        try:
+            external['bch'] = int(requests.get(bch_url).json())
+        except Exception as e:
+            print("bch", type(e), e)
+            external['bch'] = None
+        try:
+            cc_blockcounts_dict = requests.get(cc_url).json()
+        except Exception as e:
+            print("cc_blockcounts_dict", type(e), e)
+            cc_blockcounts_dict = None
+        try:
+            chainz_summary = requests.get(chainz_url).json()
+            print(chainz_summary)
+        except Exception as e:
+            print("chainz_summary", type(e), e)
+            chainz_summary = None
+        date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        print(date)
+        data_list = []
+        for key in cc_blockcounts_dict['result']:
+            valid = False
+            ext_blockcount = None
+            try:
+                cc_blockcount = rpc_call(method="getblockcount", params=[key],
+                                         url="https://plugin-api.core.cloudchainsinc.com")['result']
+            except Exception as e:
+                cc_blockcount = None
+                # print("cc_blockcount error", type(e), e)
+            try:
+                if key in xrouter_services:
+                    xrouter_blockcount = int(xb.xrGetBlockCount(side="A", coin=key, node_count=3))
+                if xrouter_blockcount == 0:
+                    xrouter_blockcount = None
+            except Exception as e:
+                # print("xrouter_blockcount error", type(e), e)
+                xrouter_blockcount = None
+            if isinstance(cc_blockcount, int):
+                if chainz_summary is not None and key.lower() in chainz_summary:
+                    chainz_blockcount = chainz_summary[key.lower()]['height']
+                    if chainz_blockcount and isinstance(chainz_blockcount, int) and \
+                            chainz_blockcount + block_tolerance >= cc_blockcount >= chainz_blockcount - block_tolerance:
+                        valid = True
+                    elif isinstance(xrouter_blockcount, int) and \
+                            xrouter_blockcount + block_tolerance >= cc_blockcount >= xrouter_blockcount - block_tolerance:
+                        valid = True
+                    elif not (isinstance(chainz_blockcount, int) and isinstance(xrouter_blockcount, int)):
+                        valid = '?'
+                    c_dict = {'coin': key, 'cc_blockcount': cc_blockcount, 'external': chainz_blockcount,
+                              'xrouter': xrouter_blockcount, 'valid': valid}
+                    data_list.append(c_dict)
+                elif key.lower() in external and external[key.lower()] is not None:
+                    ext_blockcount = external[key.lower()]
+                    if isinstance(ext_blockcount, int) and \
+                            ext_blockcount + block_tolerance >= cc_blockcount >= ext_blockcount - block_tolerance:
+                        valid = True
+                    elif isinstance(xrouter_blockcount, int) and \
+                            xrouter_blockcount + block_tolerance >= cc_blockcount >= xrouter_blockcount - block_tolerance:
+                        valid = True
+                    elif not (isinstance(ext_blockcount, int) and isinstance(xrouter_blockcount, int)):
+                        valid = '?'
+                    c_dict = {'coin': key, 'cc_blockcount': cc_blockcount, 'external': ext_blockcount,
+                              'xrouter': xrouter_blockcount, 'valid': valid}
+                    data_list.append(c_dict)
+                elif key != 'POLIS':
+                    if isinstance(xrouter_blockcount, int) and \
+                            xrouter_blockcount + block_tolerance >= cc_blockcount >= xrouter_blockcount - block_tolerance:
+                        valid = True
+                    elif not isinstance(xrouter_blockcount, int):
+                        valid = '?'
+                    c_dict = {'coin': key, 'cc_blockcount': cc_blockcount, 'external': None,
+                              'xrouter': xrouter_blockcount, 'valid': valid}
+                    data_list.append(c_dict)
+            else:
+                c_dict = {'coin': key, 'cc_blockcount': cc_blockcount, 'external': ext_blockcount,
+                          'xrouter': xrouter_blockcount, 'valid': False}
+                data_list.append(c_dict)
+        if ignore_timer or ccblockcounts_logger_timer == 0 or \
+                time.time() - ccblockcounts_logger_timer > ccblockcounts_logger_loop_timer:
+            msg = f"{' coin':<7} | {'cc_height':<9} | {'external':<9} | {'xrouter':<9} | {'valid'}"
+            blockcounts_logger.info(msg)
+            blockcounts_logger.info('-' * 60)
+            list_to_mail = []
+            str_coins = ""
+            for each in sorted(data_list, key=lambda k: k['coin']):
+                msg = f"{' ' + each['coin']:<7} | {str(each['cc_blockcount']):<9} | {str(each['external']):<9} | {str(each['xrouter']):<9} | {each['valid']}"
+                blockcounts_logger.info(msg)
+                if each['valid'] is False and each['coin'] in active_xlite_coin:
+                    if str_coins != "":
+                        str_coins = str_coins + ', '
+                    list_to_mail.append(each)
+                    str_coins = str_coins + each['coin']
+            ccblockcounts_logger_timer = time.time()
+            if config.email_send:
+                try:
+                    with open('last_email.pic', 'rb') as fp:
+                        last_email_date = pickle.load(fp)
+                except Exception as e:
+                    print("send_email", type(e), e)
+                    last_email_date = None
+                    diff_date = None
+                else:
+                    diff_date = datetime.now() - last_email_date
+                    # print("diff_date:", diff_date.total_seconds())
+                # print(type(last_email_date), last_email_date)
+                if len(list_to_mail) > 0 and \
+                        last_email_date is None or \
+                        diff_date and diff_date.total_seconds() > ccblockcounts_mail_delay:
+                    try:
+                        s_em = send_email(subject="Cloudchains API Monitoring alert: " + str_coins,
+                                          text="\n".join(str(x) for x in list_to_mail))
+                    except Exception as e:
+                        print("send_email", type(e), e)
+                    blockcounts_logger.warn("CC coins fails: " + str_coins + ", sending alert mail :" + str(s_em))
+                    with open('last_email.pic', 'wb') as fp:
+                        pickle.dump(datetime.now(), fp)
+        # exit()
 
 
-def get_xbp2p_logs(start_date, end_date, id="", status=""):
+def extract_log(log_file, hours):
+    # return list with extract
+    # "%Y-%m-%d %H:%M:%S"
+    test_delta = timedelta(hours=hours)
+    ex_start_date = datetime.now() - test_delta
+    ex_end_date = datetime.now()
+    result = []
+    once = True
+    with open(log_file, 'r') as fileread:
+        file = fileread.readlines()
+    for line in file:
+        # print(line[1:5])
+        if line[1:5].isnumeric():
+            # print(line[1:20])
+            line_to_datetime = datetime.strptime(line[1:20], '%Y-%m-%d %H:%M:%S')
+            # exit()
+            if ex_start_date <= line_to_datetime <= ex_end_date:
+                result.append(line)
+    if len(result) > 1:
+        print(result[0][1:20])
+        print(result[-1][1:20])
+    return result
+
+
+def count_trade(log_list):
+    count = 0
+    for line in log_list:
+        if "done!" in line and ("finished" in line or "initialized" in line):
+            count += 1
+    return count
+
+
+def get_xbp2p_logs(start_date, end_date, order_id="", status=""):
     # DATE FORMAT datetime.now().strftime('%Y-%b-%d %H:%M:%S')
     date_xb_log_str = datetime.now().strftime('%Y%m%d')
     fp_xbridgep2p_log_A = config.chaindir_A + "/log/xbridgep2p_" + date_xb_log_str + ".log"
@@ -607,8 +734,8 @@ def get_xbp2p_logs(start_date, end_date, id="", status=""):
             if start_date < line_to_datetime < end_date:
                 # print("yes")
                 log_B.append(line)
-    a_file = id + "_" + status + "_A.log"
-    b_file = id + "_" + status + "_B.log"
+    a_file = order_id + "_" + status + "_A.log"
+    b_file = order_id + "_" + status + "_B.log"
     textfile = open(a_file, "w")
     for each in log_A:
         textfile.write(each)
@@ -627,11 +754,179 @@ def get_xbp2p_logs(start_date, end_date, id="", status=""):
     os.remove(b_file)
 
 
+def send_email(subject="", text=""):
+    yag = yagmail.SMTP(config.mail_log, config.mail_pass)
+    contents = [
+        text
+    ]
+    try:
+        yag.send(config.mail_destination, subject, contents)
+    except Exception as error:
+        print(type(error), error)
+        return False
+    else:
+        return True
+
+
+def check_volume_print(coin1, coin2, usd_vol, usd_vol_s2, usd_volume_target):
+    if usd_vol > usd_volume_target:
+        print(datetime.now().strftime('%Y-%m-%d_%H:%M:%S'), "| 24H USD Volume on", coin1 + "/" + coin2 + ":",
+              usd_vol, usd_vol_s2, "| target:", usd_volume_target, "reached.\n")
+    else:
+        print(datetime.now().strftime('%Y-%m-%d_%H:%M:%S'), "| 24H USD Volume on", coin1 + "/" + coin2 + ":",
+              usd_vol, usd_vol_s2, "| target:", usd_volume_target, "in progress.")
+
+
 # def play_my_sound(sound):
 #     play(sound)
 
+def exec_side(coin1, coin2, side):
+    # side s1 s2
+    # s1, A make order B take order
+    # s2, B make order A taker order
+    global trade_counter, maker_order, taker_order
+    start_date = datetime.now() - time_delta
+    print("exec_side(", coin1, coin2, side, ")")
+    if side == 's1':
+        maker_side = "A"
+        taker_side = "B"
+    elif side == 's2':
+        maker_side = "B"
+        taker_side = "A"
+    else:
+        print("exec_side, invalid side set:", side)
+        exit()
+    print(side, maker_side, "order maker:\n   from:", maker_amount, coin1, "to:", taker_amount, coin2,
+          "@price:", order_price)
+    if not check_coins_exist([coin1, coin2]):
+        print("check_coins_exist A B failed!")
+        exit()
+    else:
+        print("check_coins_exist A B ok!")
+    if maker_side == "A":
+        m_maker_address = instance_A.coin_address_list[coin1]
+        m_taker_address = instance_A.coin_address_list[coin2]
+        t_maker_address = instance_B.coin_address_list[coin2]
+        t_taker_address = instance_B.coin_address_list[coin1]
+    elif maker_side == "B":
+        m_maker_address = instance_B.coin_address_list[coin1]
+        m_taker_address = instance_B.coin_address_list[coin2]
+        t_maker_address = instance_A.coin_address_list[coin2]
+        t_taker_address = instance_A.coin_address_list[coin1]
+    if config.test_partial and config.test_mode:
+        partial_amount = "{:.6f}".format(float(maker_amount) / 2)
+        msg = maker_side + ".DxMakePartialOrder( " + coin1 + ", " + str(maker_amount) + ", " + m_maker_address + ", " + \
+              coin2 + ", " + str(taker_amount) + ", " + m_taker_address + ", " + partial_amount + ", " + "False )"
+        partial_amount = "{:.6f}".format(float(maker_amount) / 2)
+
+        maker_order = xb.dxMakePartialOrder(maker_side, coin1, maker_amount, m_maker_address,
+                                            coin2, taker_amount, m_taker_address, partial_amount, False)
+    else:
+        msg = maker_side + ".DxMakeOrder( " + coin1 + ", " + str(maker_amount) + ", " + \
+              m_maker_address + ", " + coin2 + ", " + str(taker_amount) + ", " + \
+              m_taker_address + " )"
+        maker_order = xb.dxMakeOrder(maker_side, coin1, maker_amount, m_maker_address, coin2, taker_amount,
+                                     m_taker_address)
+    trade_logger.info(msg)
+    print(maker_order)
+    time.sleep(1)
+    if 'id' not in maker_order:
+        print("error with order\n", maker_order)
+        exit()
+    if wait_created_order(maker_order['id'], maker_side):
+        msg = taker_side + ".DxTakeOrder( " + maker_order['id'] + ", " + t_maker_address + ", " + t_taker_address + " )"
+        trade_logger.info(msg)
+        taker_order = xb.dxTakeOrder(taker_side, maker_order['id'], t_maker_address, t_taker_address)
+        taking_timer = time.time()
+        time.sleep(1)
+        if 'code' in taker_order:
+            trade_logger.critical(taker_order)
+        else:
+            taker_order = xb.getorderstatus(taker_side, maker_order['id'])
+            counter = 0
+            fail_open_count = 0
+            done = 0
+            display_timer = 0
+            display_delay = 10
+            while done == 0:
+                counter += 1
+                if display_timer == 0 or time.time() - display_timer > display_delay:
+                    print("in progress:", maker_side + ".maker_status:", [maker_order['status']],
+                          taker_side + ".taker_status:", [taker_order['status']])
+                    display_timer = time.time()
+                if "initialized" in taker_order['status']:
+                    if time.time() - taking_timer > max_delay_initialized:
+                        xb.cancelorder(maker_side, maker_order['id'])
+                        xb.cancelorder(taker_side, maker_order['id'])
+                        msg = taker_side + ".Taker status stuck on 'initialized', cancel " + maker_order['id']
+                        update_fee_count(taker_side)
+                        trade_logger.critical(msg)
+                        time.sleep(1)
+                        break
+                elif "open" in taker_order['status']:
+                    fail_open_count += 1
+                    if fail_open_count == 3:
+                        xb.cancelorder(maker_side, maker_order['id'])
+                        e_msg = "open while taken,", maker_side + ".cancel " + maker_order['id']
+                        # print(msg)
+                        trade_logger.critical(e_msg)
+                        time.sleep(1)
+                        maker_order = xb.getorderstatus(maker_side, maker_order['id'])
+                        break
+                    time.sleep(0.5)
+                    xb.dxTakeOrder(taker_side, maker_order['id'], t_maker_address, t_taker_address)
+                    print(msg)
+                    time.sleep(0.5)
+                elif "finished" in taker_order['status']:
+                    trade_counter += 1
+                    total_trade_time.append(time.time() - taking_timer)
+                    done = 1
+                    update_fee_count(taker_side)
+                    # play_my_sound(sound1)
+                    # CC API CHECK
+                    try:
+                        process = subprocess.Popen(['python3', 'cc-api-check/src/run.py'],
+                                                   stdout=subprocess.DEVNULL,
+                                                   stderr=subprocess.STDOUT)
+                        process.wait()
+                    except Exception as e:
+                        print(e)
+                    # CC API CHECK
+                elif check_status_fail(taker_order['status']):
+                    msg = "error with order: " + maker_order['id'] + ", " + taker_order[
+                        'status']
+                    trade_logger.critical(msg)
+                    update_fee_count(taker_side)
+                    end_date = datetime.now()
+                    try:
+                        get_xbp2p_logs(start_date, end_date, maker_order['id'],
+                                       taker_order['status'])
+                    except Exception as e:
+                        print(e)
+                    exit()
+                time.sleep(1)
+                taker_order = xb.getorderstatus(taker_side, maker_order['id'])
+                maker_order = xb.getorderstatus(maker_side, maker_order['id'])
+            msg = "done!" + maker_order['id'] + ", " + taker_order['status']
+            trade_logger.info(msg)
+            time.sleep(2)
+            end_date = datetime.now()
+            try:
+                get_xbp2p_logs(start_date, end_date, maker_order['id'], taker_order['status'])
+            except Exception as e:
+                print(e)
+    else:
+        print('wait_created_order(' + maker_order['id'] + ', ' + maker_side + ') FAILED')
+        end_date = datetime.now()
+        try:
+            get_xbp2p_logs(start_date, end_date, maker_order['id'], 'son')
+        except Exception as e:
+            print(e)
+
+
 def main():
-    global trade_counter, fail_count, flush_timer, maker_amount, taker_amount, order_price
+    global trade_counter, flush_timer
+    fail_count = 0
 
     try:
         print("dxloadxbridgeconf A:", xb.dxloadxbridgeconf("A"))
@@ -641,9 +936,7 @@ def main():
     except Exception as e:
         print(e)
         exit()
-
     iteration = 0
-    update_dex_bals(display=True)
     while 1:
         # CC API CHECK
         try:
@@ -651,7 +944,7 @@ def main():
                                        stderr=subprocess.STDOUT)
             process.wait()
         except Exception as e:
-            print(e)
+            print("cc-api-check:", type(e), e)
         # CC API CHECK
         iteration += 1
         # if iteration % 5 == 0 or iteration == 1:
@@ -666,8 +959,8 @@ def main():
             cancel_all_open_orders()
             org_trade_counter = trade_counter
             rand = random.randrange(0, 2)
+            # FLIP PAIRS RANDOMLY!
             if rand == 1:
-                # FLIP PAIRS RANDOMLY!
                 coin1 = market[1]
                 coin2 = market[0]
                 instance_A.get_addresses(coin1, coin2)
@@ -678,17 +971,13 @@ def main():
                 instance_A.get_addresses(coin1, coin2)
                 instance_B.get_addresses(coin1, coin2)
             usd_vol, usd_vol_s2 = get_pair_usd_volume(coin1, coin2)
-            if usd_vol < usd_volume_target or test_mode and trade_counter != trade_to_do:
-                print("rand:", rand, coin1 + "/" + coin2, "usd_vol:", usd_vol, "usd_vol_s2:", usd_vol_s2, "target:",
-                      usd_volume_target)
-                taking_timer = 0
-                loop_timer = time.time()
+            check_volume_print(coin1, coin2, usd_vol, usd_vol_s2, usd_volume_target)
+            if usd_vol < usd_volume_target or test_mode:
+                # print("rand:", rand, coin1 + "/" + coin2, "usd_vol:", usd_vol, "usd_vol_s2:", usd_vol_s2, "target:",
+                #       usd_volume_target)
                 update_dex_bals()
                 if coin1 in instance_A.balances and coin2 in instance_A.balances and coin1 in instance_B.balances and \
                         coin2 in instance_B.balances:
-                    maker_amount = None
-                    taker_amount = None
-                    order_price = None
                     order_data_bol = calc_order_data(coin1, coin2)
                     if order_data_bol:
                         check_s1 = check_side_bal('side1', coin1, coin2)
@@ -699,278 +988,10 @@ def main():
                                 print("check_s1 modifier => false")
                         print("order_data_bol:\n   ", order_data_bol, "check_side_bal('side1')", check_s1,
                               "check_side_bal('side2')", check_s2)
-                        if check_s1 and config.fee_to_burn['B'] >= 0.0151:
-                            start_date = datetime.now() - time_delta
-                            print("side1 A order maker:\n   from:", maker_amount, coin1, "to:", taker_amount, coin2,
-                                  "@price:", order_price)
-                            if not (check_coins_exist([coin1, coin2]) or check_coins_exist([coin1, coin2])):
-                                print("check_coins_exist A B failed!")
-                                exit()
-                                break
-                            else:
-                                print("check_coins_exist A B ok!")
-                            if config.test_partial and config.test_mode:
-                                partial_amount = "{:.6f}".format(float(maker_amount) / 2)
-                                msg = "A.DxMakePartialOrder( " + coin1 + ", " + str(maker_amount) + ", " + \
-                                      instance_A.coin_address_list[
-                                          coin1] + ", " + coin2 + ", " + str(taker_amount) + ", " + \
-                                      instance_A.coin_address_list[
-                                          coin2] + ", " + partial_amount + ", " + "False )"
-                                maker_order = xb.dxMakePartialOrder("A", coin1, maker_amount,
-                                                                    instance_A.coin_address_list[coin1],
-                                                                    coin2, taker_amount,
-                                                                    instance_A.coin_address_list[coin2],
-                                                                    partial_amount, False)
-                            else:
-                                msg = "A.DxMakeOrder( " + coin1 + ", " + str(maker_amount) + ", " + \
-                                      instance_A.coin_address_list[
-                                          coin1] + ", " + coin2 + ", " + str(taker_amount) + ", " + \
-                                      instance_A.coin_address_list[
-                                          coin2] + " )"
-                                maker_order = xb.dxMakeOrder("A", coin1, maker_amount,
-                                                             instance_A.coin_address_list[coin1],
-                                                             coin2, taker_amount,
-                                                             instance_A.coin_address_list[coin2])
-                            trade_logger.info(msg)
-                            print(maker_order)
-                            order_timer = time.time()
-                            time.sleep(1)
-                            if 'id' not in maker_order:
-                                print("error with order\n", maker_order)
-                                exit()
-                            if wait_created_order(maker_order['id'], "A"):
-                                msg = "B.DxTakeOrder( " + maker_order['id'] + ", " + instance_B.coin_address_list[
-                                    coin2] + ", " + \
-                                      instance_B.coin_address_list[coin1] + " )"
-                                trade_logger.info(msg)
-                                taker_order = xb.dxTakeOrder("B", maker_order['id'],
-                                                             instance_B.coin_address_list[coin2],
-                                                             instance_B.coin_address_list[coin1])
-                                taking_timer = time.time()
-                                time.sleep(1)
-                                if 'code' in taker_order:
-                                    trade_logger.critical(taker_order)
-                                else:
-                                    taker_order = xb.getorderstatus("B", maker_order['id'])
-                                    counter = 0
-                                    fail_open_count = 0
-                                    done = 0
-                                    display_timer = 0
-                                    display_delay = 10
-                                    while done == 0:
-                                        counter += 1
-                                        if display_timer == 0 or time.time() - display_timer > display_delay:
-                                            print("in progress: A.maker_status:", [maker_order['status']],
-                                                  "B.taker_status:",
-                                                  [taker_order['status']])
-                                            display_timer = time.time()
-                                        if "initialized" in taker_order['status']:
-                                            if time.time() - taking_timer > max_delay_initialized:
-                                                xb.cancelorder("A", maker_order['id'])
-                                                msg = "B.Taker status stuck on 'initialized', A.cancel " + maker_order[
-                                                    'id']
-                                                trade_logger.critical(msg)
-                                                time.sleep(1)
-                                                # taker_order = xb.getorderstatus("B", maker_order['id'])
-                                                break
-                                        elif "open" in taker_order['status']:
-                                            fail_open_count += 1
-                                            if fail_open_count == 3:
-                                                xb.cancelorder("A", maker_order['id'])
-                                                msg = "open while taken, A.cancel " + maker_order['id']
-                                                trade_logger.critical(msg)
-                                                time.sleep(1)
-                                                maker_order = xb.getorderstatus("A", maker_order['id'])
-                                                break
-                                            time.sleep(0.5)
-                                            xb.dxTakeOrder("B", maker_order['id'], instance_B.coin_address_list[coin2],
-                                                           instance_B.coin_address_list[coin1])
-                                            print(msg)
-                                            time.sleep(0.5)
-                                        elif "finished" in taker_order['status']:
-                                            trade_counter += 1
-                                            total_trade_time.append(time.time() - taking_timer)
-                                            done = 1
-                                            update_fee_count('B')
-                                            # play_my_sound(sound1)
-                                            # CC API CHECK
-                                            try:
-                                                process = subprocess.Popen(['python3', 'cc-api-check/src/run.py'],
-                                                                           stdout=subprocess.DEVNULL,
-                                                                           stderr=subprocess.STDOUT)
-                                                process.wait()
-                                            except Exception as e:
-                                                print(e)
-                                            # CC API CHECK
-                                        elif check_status_fail(taker_order['status']):
-                                            msg = "error with order: " + maker_order['id'] + ", " + taker_order[
-                                                'status']
-                                            trade_logger.critical(msg)
-                                            update_fee_count('B')
-                                            end_date = datetime.now()
-                                            try:
-                                                get_xbp2p_logs(start_date, end_date, maker_order['id'],
-                                                               taker_order['status'])
-                                            except Exception as e:
-                                                print(e)
-                                            exit()
-                                        time.sleep(1)
-                                        maker_order = xb.getorderstatus("A", maker_order['id'])
-                                        taker_order = xb.getorderstatus("B", maker_order['id'])
-                                    msg = "done! " + maker_order['id'] + ", " + taker_order['status']
-                                    trade_logger.info(msg)
-                                    time.sleep(2)
-                                    end_date = datetime.now()
-                                    try:
-                                        get_xbp2p_logs(start_date, end_date, maker_order['id'], taker_order['status'])
-                                    except Exception as e:
-                                        print(e)
-                                # MASTER SELL COIN1 FOR COIN2, SLAVE BUY COIN1 WITH COIN 2
-                            else:
-                                print('wait_created_order(' + maker_order['id'] + ', "A") FAILED')
-                                end_date = datetime.now()
-                                try:
-                                    get_xbp2p_logs(start_date, end_date, maker_order['id'], "son")
-                                except Exception as e:
-                                    print(e)
-                        elif check_s2 and config.fee_to_burn['A'] >= 0.0151:
-                            start_date = datetime.now() - time_delta
-                            print("side2 B order maker:\n   from:", maker_amount, coin1, "to:", taker_amount, coin2,
-                                  "@price:", order_price)
-                            if not (check_coins_exist([coin1, coin2]) or check_coins_exist([coin1, coin2])):
-                                print("check_coins_exist A B failed!")
-                                exit()
-                                break
-                            else:
-                                print("check_coins_exist A B ok!")
-                            if config.test_partial and config.test_mode:
-                                partial_amount = "{:.6f}".format(float(maker_amount) / 2)
-                                msg = "B.DxMakePartialOrder( " + coin1 + ", " + str(maker_amount) + ", " + \
-                                      instance_B.coin_address_list[coin1] + ", " + coin2 + ", " + str(
-                                    taker_amount) + ", " + \
-                                      instance_B.coin_address_list[coin2] + ", " + partial_amount + ", " + "False )"
-                                partial_amount = "{:.6f}".format(float(maker_amount) / 2)
-
-                                maker_order = xb.dxMakePartialOrder("B", coin1, maker_amount,
-                                                                    instance_B.coin_address_list[coin1],
-                                                                    coin2, taker_amount,
-                                                                    instance_B.coin_address_list[coin2],
-                                                                    partial_amount, False)
-
-                            else:
-                                msg = "B.DxMakeOrder( " + coin1 + ", " + str(maker_amount) + ", " + \
-                                      instance_B.coin_address_list[
-                                          coin1] + ", " + coin2 + ", " + str(taker_amount) + ", " + \
-                                      instance_B.coin_address_list[
-                                          coin2] + " )"
-                                maker_order = xb.dxMakeOrder("B", coin1, maker_amount,
-                                                             instance_B.coin_address_list[coin1],
-                                                             coin2, taker_amount, instance_B.coin_address_list[coin2])
-                            trade_logger.info(msg)
-                            print(maker_order)
-                            # MOD SIDE2
-                            order_timer = time.time()
-                            time.sleep(1)
-                            if 'id' not in maker_order:
-                                print("error with order\n", maker_order)
-                                exit()
-                            if wait_created_order(maker_order['id'], "B"):
-                                msg = "A.DxTakeOrder( " + maker_order['id'] + ", " + instance_A.coin_address_list[
-                                    coin2] + ", " + \
-                                      instance_A.coin_address_list[coin1] + " )"
-                                trade_logger.info(msg)
-
-                                taker_order = xb.dxTakeOrder("A", maker_order['id'],
-                                                             instance_A.coin_address_list[coin2],
-                                                             instance_A.coin_address_list[coin1])
-                                taking_timer = time.time()
-                                time.sleep(1)
-                                if 'code' in taker_order:
-                                    trade_logger.critical(taker_order)
-                                else:
-                                    taker_order = xb.getorderstatus("A", maker_order['id'])
-                                    counter = 0
-                                    fail_open_count = 0
-                                    done = 0
-                                    display_timer = 0
-                                    display_delay = 10
-                                    while done == 0:
-                                        counter += 1
-                                        if display_timer == 0 or time.time() - display_timer > display_delay:
-                                            print("in progress: B.maker_status:", [maker_order['status']],
-                                                  "A.taker_status:",
-                                                  [taker_order['status']])
-                                            display_timer = time.time()
-                                        if "initialized" in taker_order['status']:
-                                            if time.time() - taking_timer > max_delay_initialized:
-                                                xb.cancelorder("B", maker_order['id'])
-                                                msg = "A.Taker status stuck on 'initialized', B.cancel " + maker_order[
-                                                    'id']
-                                                trade_logger.critical(msg)
-                                                time.sleep(1)
-                                                # taker_order = xb.getorderstatus("A", maker_order['id'])
-                                                break
-                                        elif "open" in taker_order['status']:
-                                            fail_open_count += 1
-                                            if fail_open_count == 3:
-                                                xb.cancelorder("B", maker_order['id'])
-                                                e_msg = "open while taken, B.cancel " + maker_order['id']
-                                                # print(msg)
-                                                trade_logger.critical(e_msg)
-                                                time.sleep(1)
-                                                maker_order = xb.getorderstatus("B", maker_order['id'])
-                                                break
-                                            time.sleep(0.5)
-                                            xb.dxTakeOrder("A", maker_order['id'], instance_A.coin_address_list[coin2],
-                                                           instance_A.coin_address_list[coin1])
-                                            print(msg)
-                                            time.sleep(0.5)
-                                        elif "finished" in taker_order['status']:
-                                            trade_counter += 1
-                                            total_trade_time.append(time.time() - taking_timer)
-                                            done = 1
-                                            update_fee_count('A')
-                                            # play_my_sound(sound1)
-                                            # CC API CHECK
-                                            try:
-                                                process = subprocess.Popen(['python3', 'cc-api-check/src/run.py'],
-                                                                           stdout=subprocess.DEVNULL,
-                                                                           stderr=subprocess.STDOUT)
-                                                process.wait()
-                                            except Exception as e:
-                                                print(e)
-                                            # CC API CHECK
-                                        elif check_status_fail(taker_order['status']):
-                                            msg = "error with order: " + maker_order['id'] + ", " + taker_order[
-                                                'status']
-                                            trade_logger.critical(msg)
-                                            update_fee_count('A')
-                                            end_date = datetime.now()
-                                            try:
-                                                get_xbp2p_logs(start_date, end_date, maker_order['id'],
-                                                               taker_order['status'])
-                                            except Exception as e:
-                                                print(e)
-                                            exit()
-                                        time.sleep(1)
-                                        taker_order = xb.getorderstatus("A", maker_order['id'])
-                                        maker_order = xb.getorderstatus("B", maker_order['id'])
-                                    msg = "done!" + maker_order['id'] + ", " + taker_order['status']
-                                    trade_logger.info(msg)
-                                    time.sleep(2)
-                                    end_date = datetime.now()
-                                    try:
-                                        get_xbp2p_logs(start_date, end_date, maker_order['id'], taker_order['status'])
-                                    except Exception as e:
-                                        print(e)
-                            else:
-                                print('wait_created_order(' + maker_order['id'] + ', "B") FAILED')
-                                end_date = datetime.now()
-                                try:
-                                    get_xbp2p_logs(start_date, end_date, maker_order['id'], 'son')
-                                except Exception as e:
-                                    print(e)
-                                # SLAVE SELL COIN1 FOR COIN2, MASTER BUY COIN1 WITH COIN 2
+                        if check_s1:
+                            exec_side(coin1, coin2, side="s1")
+                        elif check_s2:
+                            exec_side(coin1, coin2, side="s2")
                     else:
                         print("order_data_bol", order_data_bol)
                 else:
@@ -985,24 +1006,26 @@ def main():
                     # print(msg)
                     trade_logger.info(msg)
                     sleep_timer = time.time()
-                    trade_delay_current = random.uniform(trade_delay * 0.85, trade_delay * 1.15)
-                    if test_mode is False and trade_counter == trade_to_do or test_mode is True and trade_counter == test_trade_to_do:
+                    sleep_delay_current = int(random.uniform(trade_delay * 0.85, trade_delay * 1.15))
+                    daily_trade_count = count_trade(log_list=extract_log(log_file="logs/trades.log", hours=24))
+                    print("count_trade last 24H:", daily_trade_count)
+                    if config.trade_to_do_daily and daily_trade_count >= config.trade_to_do_daily:
+                        sleep_delay_current = int(sleep_delay_current * config.slow_down_modifier)
+                        print("trade_to_do_daily reached, increasing trade delay, modifier *" +
+                              str(config.slow_down_modifier))
+                    if (test_mode is False and trade_to_do and trade_counter == trade_to_do) or \
+                            (test_mode is True and test_trade_to_do and trade_counter == test_trade_to_do):
                         print("trade_to_do reached:", trade_counter)
                         exit()
-                    print("trade executed, sleep", trade_delay_current, "secs")
-                    while time.time() - sleep_timer < trade_delay_current:
+                    print("trade executed, sleep", sleep_delay_current, "secs")
+                    while time.time() - sleep_timer < sleep_delay_current:
                         print("*", end='')
                         time.sleep(5)
                     print("\nSleep done")
-                usd_vol, usd_vol_s2 = get_pair_usd_volume(coin1, coin2)
-            if usd_vol > usd_volume_target:
-                print(datetime.now().strftime('%Y-%m-%d_%H:%M:%S'), "| 24H USD Volume on", coin1 + "/" + coin2 + ":",
-                      usd_vol, usd_vol_s2, "| target:", usd_volume_target, "reached.\n")
-            else:
-                print(datetime.now().strftime('%Y-%m-%d_%H:%M:%S'), "| 24H USD Volume on", coin1 + "/" + coin2 + ":",
-                      usd_vol, usd_vol_s2, "| target:", usd_volume_target, "in progress.\n")
+                    usd_vol, usd_vol_s2 = get_pair_usd_volume(coin1, coin2)
+                    check_volume_print(coin1, coin2, usd_vol, usd_vol_s2, usd_volume_target)
+                    print()
 
         print("***loop_done***")
         # time.sleep(10)
         print("")
-        update_dex_bals(display=True)

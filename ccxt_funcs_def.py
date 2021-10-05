@@ -1,5 +1,3 @@
-import json
-import os
 import time
 import ccxt
 from logger import *
@@ -9,33 +7,16 @@ ccxt_log = setup_logger(name="CCXT_LOG", log_file='logs/ccxt.log', level=logging
 
 def init_ccxt_instance(exchange, hostname=None):
     # CCXT instance
-    # script_dir = os.path.dirname(__file__)
-    # with open(script_dir + '/utils/keys.local.json') as json_file:
-    #     data_json = json.load(json_file)
-    #     api = None
-    #     api_secret = None
-    #     for data in data_json['api_info']:
-    #         if exchange in data['exchange']:
-    #             api = data['api']
-    #             api_secret = data['secret']
-    #             break
-    #     if not (api and api_secret):
-    #         print(exchange, "need api key set in /utils/keys.local.json")
-    #         exit()
     if exchange in ccxt.exchanges:
         exchange_class = getattr(ccxt, exchange)
         if hostname:
             instance = exchange_class({
-                # 'apiKey': api,
-                # 'secret': api_secret,
                 'enableRateLimit': True,
                 'rateLimit': 1000,
                 'hostname': hostname,  # 'global.bittrex.com',
             })
         else:
             instance = exchange_class({
-                # 'apiKey': api,
-                # 'secret': api_secret,
                 'enableRateLimit': True,
                 'rateLimit': 1000,
             })
