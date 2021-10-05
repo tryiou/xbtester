@@ -29,8 +29,8 @@ slow_down_modifier = 4  # once trade_to_do_daily reached, delay per trade = trad
 n_markets = [["BLOCK", "DASH"], ["BLOCK", "LTC"], ["BLOCK", "RVN"], ["DASH", "LTC"], ["BLOCK", "PIVX"],
              ["BLOCK", "SYS"]]  # ,["BLOCK", "PIVX"], ["LTC", "PIVX"]]
 
-cc_on = True  # if set to true, check cc api height and compare to external source, print to terminal, no action
-email_send = True # if set to true, send mail to mail_destination if detecting cc chains on wrong height
+cc_on = False  # if set to true, check cc api height and compare to external source, print to terminal, no action
+email_send = False # if set to true, send mail to mail_destination if detecting cc chains on wrong height
 mail_log = "login"
 mail_pass = "pass"
 mail_destination = "destination@mail.com"
