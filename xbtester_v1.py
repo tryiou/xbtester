@@ -14,7 +14,7 @@ from logger import *
 import requests
 import zipfile
 import logging
-import subprocess
+# import subprocess
 import xb_func_defs as xb
 import yagmail
 import pickle
@@ -61,14 +61,16 @@ class Dexinst:
 session = requests.Session()
 balances_logger = setup_logger(name="BALANCES_LOG", log_file='logs/balances.log', level=logging.INFO)
 trade_logger = setup_logger(name="TRADES_LOG", log_file='logs/trades.log', level=logging.INFO)
-blockcounts_logger = setup_logger(name='CC_BLOCKCOUNTS', log_file='logs/cc_blockcounts.log', level=logging.INFO)
+if config.cc_on:
+    blockcounts_logger = setup_logger(name='CC_BLOCKCOUNTS', log_file='logs/cc_blockcounts.log', level=logging.INFO)
+    blockcounts_error_logger = setup_logger(name='CC_BLOCKCOUNTS_errors', log_file='logs/cc_blockcounts_errors.log',
+                                            level=logging.INFO)
 logging.basicConfig(level=logging.INFO)
 ccblockcounts_mail_delay = 60 * 60
 
 test_mode = config.test_mode
 test_trade_to_do = config.test_trade_to_do
 test_amount = config.test_amount
-cc_on = config.cc_on
 size_max = config.size_max
 size_min = config.size_min
 trade_to_do = config.trade_to_do
@@ -86,7 +88,7 @@ else:
 
 xbridge_callcount_loop_timer = 60
 ccblockcounts_logger_timer = 0
-ccblockcounts_logger_loop_timer = 60 * 5
+ccblockcounts_logger_loop_timer = 60 * 15
 instance_A = Dexinst("A")
 instance_B = Dexinst("B")
 ccxt_bittrex = init_ccxt_instance("bittrex", "global.bittrex.com")
@@ -159,7 +161,7 @@ def cex_get_btc_rate_from_orderbook(coin):
     done = False
     rate = None
     while not done:
-        if coin != "USD":
+        if coin != "USD" and coin != "USDT":
             if coin + "/BTC" in ccxt_bittrex.symbols:
                 if use_ws:
                     cex_orderbook = ws_client.asyncio.get_event_loop().run_until_complete(
@@ -201,7 +203,6 @@ def cex_get_btc_rate_from_orderbook(coin):
 
 def get_pair_usd_volume(c1, c2):
     btcusd_r = cex_get_btc_rate_from_orderbook("USD")
-
     if c1 + "/BTC" in ccxt_bittrex.symbols:
         coin1_r = cex_get_btc_rate_from_orderbook(c1)
     else:
@@ -216,7 +217,6 @@ def get_pair_usd_volume(c1, c2):
 
     if len(res) == 0:
         res = xb.dxgetorderfills("B", c1, c2, True)
-
         if len(res) == 0:
             return 0, 0
     total_coin1 = 0
@@ -233,8 +233,6 @@ def get_pair_usd_volume(c1, c2):
             elif each['taker'] == c1 and each['maker'] == c2:
                 total_coin1 += float(each['taker_size'])
                 total_coin2 += float(each['maker_size'])
-    # print(total_coin1, total_coin2, coin1_r, coin2_r, btcusd_r)
-    # exit()
     c1_usd_v = total_coin1 * coin1_r * btcusd_r
     c2_usd_v = total_coin2 * coin2_r * btcusd_r
     return c1_usd_v, c2_usd_v
@@ -307,10 +305,9 @@ def wait_created_order(order_id, side=None):
         if not cancel_b:
             cancel_a = wait_sequence(order_id, "A", new_timer)
     if cancel_a or cancel_b:
-        print(xb.cancelorder(side, order_id))
         msg = "stuck on 'new', " + side + ".cancelling: " + order_id
-        # print(msg)
         trade_logger.critical(msg)
+        print(xb.cancelorder(side, order_id))
         return False
     else:
         return True
@@ -326,7 +323,6 @@ def check_status_fail(status):
 
 def cancel_all_open_orders():
     res_a = xb.getopenorders("A")
-
     for order in res_a:
         msg = "A.CANCELLING:\n", order["id"]
         # print(msg)
@@ -524,118 +520,104 @@ def rpc_call(method, params, port=443, url="https://127.0.0.1"):
     return response.json()
 
 
+def get_external_blockcounts():
+    xsn_url = 'https://explorer.masternodes.online/currencies/XSN/'
+    rvn_url = 'https://rvn.cryptoscope.io/api/getblockcount/'
+    dogecoin_url = 'https://dogechain.info/chain/Dogecoin/q/getblockcount'
+    bch_url = 'https://api.fullstack.cash/v5/blockchain/getBlockCount'
+    external = {}
+    try:
+        xsn = requests.get(xsn_url).text
+        xsn_separator1 = xsn.find('Last block: ') + 12
+        xsn_separator2 = xsn.find('<br />', xsn_separator1)
+        external['xsn'] = int(xsn[xsn_separator1:xsn_separator2].replace(',', ''))
+    except Exception as e:
+        blockcounts_error_logger.warn("external xsn error:\n" + str(type(e)) + "\n" + str(e))
+        external['xsn'] = None
+    try:
+        # print(requests.get(rvn_url).json())
+        external['rvn'] = int(requests.get(rvn_url).json()['blockcount'])
+    except Exception as e:
+        blockcounts_error_logger.warn("external rvn error:\n" + str(type(e)) + "\n" + str(e))
+        external['rvn'] = None
+    try:
+        external['doge'] = int(requests.get(dogecoin_url).json())
+    except Exception as e:
+        blockcounts_error_logger.warn("external doge error:\n" + str(type(e)) + "\n" + str(e))
+        external['doge'] = None
+    try:
+        external['bch'] = int(requests.get(bch_url).json())
+    except Exception as e:
+        blockcounts_error_logger.warn("external bch error:\n" + str(type(e)) + "\n" + str(e))
+        external['bch'] = None
+    return external
+
+
 def check_cloudchains_blockcounts(ignore_timer=False):
     global ccblockcounts_logger_timer
-    block_tolerance = 10
-    if cc_on:
-        active_xlite_coin = ["BLOCK", "BTC", "DASH", "DOGE", "LTC", "PIVX", "SYS"]
-        print("check_cloudchains_blockcounts")
-        chainz_url = "https://chainz.cryptoid.info/explorer/api.dws?q=summary"
-        cc_url = 'https://plugin-api.core.cloudchainsinc.com/height'
-        external = {}
-        xrouter_services = xb.xrGetNetworkServices(side='A')['spvwallets']
-        xrouter_services = [word.replace('xr::', '') for word in xrouter_services]
-        xsn_url = 'https://explorer.masternodes.online/currencies/XSN/'
-        rvn_url = 'https://rvn.cryptoscope.io/api/getblockcount/'
-        dogecoin_url = 'https://dogechain.info/chain/Dogecoin/q/getblockcount'
-        bch_url = 'https://api.fullstack.cash/v5/blockchain/getBlockCount'
-        try:
-            xsn = requests.get(xsn_url).text
-            xsn_separator1 = xsn.find('Last block: ') + 12
-            xsn_separator2 = xsn.find('<br />', xsn_separator1)
-            external['xsn'] = int(xsn[xsn_separator1:xsn_separator2].replace(',', ''))
-        except Exception as e:
-            print("xsn", type(e), e)
-            external['xsn'] = None
-        try:
-            # print(requests.get(rvn_url).json())
-            external['rvn'] = int(requests.get(rvn_url).json()['blockcount'])
-        except Exception as e:
-            print("rvn", type(e), e)
-            external['rvn'] = None
-        try:
-            external['doge'] = int(requests.get(dogecoin_url).json())
-        except Exception as e:
-            print("doge", type(e), e)
-            external['doge'] = None
-        try:
-            external['bch'] = int(requests.get(bch_url).json())
-        except Exception as e:
-            print("bch", type(e), e)
-            external['bch'] = None
-        try:
-            cc_blockcounts_dict = requests.get(cc_url).json()
-        except Exception as e:
-            print("cc_blockcounts_dict", type(e), e)
-            cc_blockcounts_dict = None
-        try:
-            chainz_summary = requests.get(chainz_url).json()
-            print(chainz_summary)
-        except Exception as e:
-            print("chainz_summary", type(e), e)
-            chainz_summary = None
-        date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        print(date)
-        data_list = []
-        for key in cc_blockcounts_dict['result']:
-            valid = False
-            ext_blockcount = None
-            try:
-                cc_blockcount = rpc_call(method="getblockcount", params=[key],
-                                         url="https://plugin-api.core.cloudchainsinc.com")['result']
-            except Exception as e:
-                cc_blockcount = None
-                # print("cc_blockcount error", type(e), e)
-            try:
-                if key in xrouter_services:
-                    xrouter_blockcount = int(xb.xrGetBlockCount(side="A", coin=key, node_count=3))
-                if xrouter_blockcount == 0:
-                    xrouter_blockcount = None
-            except Exception as e:
-                # print("xrouter_blockcount error", type(e), e)
-                xrouter_blockcount = None
-            if isinstance(cc_blockcount, int):
-                if chainz_summary is not None and key.lower() in chainz_summary:
-                    chainz_blockcount = chainz_summary[key.lower()]['height']
-                    if chainz_blockcount and isinstance(chainz_blockcount, int) and \
-                            chainz_blockcount + block_tolerance >= cc_blockcount >= chainz_blockcount - block_tolerance:
-                        valid = True
-                    elif isinstance(xrouter_blockcount, int) and \
-                            xrouter_blockcount + block_tolerance >= cc_blockcount >= xrouter_blockcount - block_tolerance:
-                        valid = True
-                    elif not (isinstance(chainz_blockcount, int) and isinstance(xrouter_blockcount, int)):
-                        valid = '?'
-                    c_dict = {'coin': key, 'cc_blockcount': cc_blockcount, 'external': chainz_blockcount,
-                              'xrouter': xrouter_blockcount, 'valid': valid}
-                    data_list.append(c_dict)
-                elif key.lower() in external and external[key.lower()] is not None:
-                    ext_blockcount = external[key.lower()]
-                    if isinstance(ext_blockcount, int) and \
-                            ext_blockcount + block_tolerance >= cc_blockcount >= ext_blockcount - block_tolerance:
-                        valid = True
-                    elif isinstance(xrouter_blockcount, int) and \
-                            xrouter_blockcount + block_tolerance >= cc_blockcount >= xrouter_blockcount - block_tolerance:
-                        valid = True
-                    elif not (isinstance(ext_blockcount, int) and isinstance(xrouter_blockcount, int)):
-                        valid = '?'
-                    c_dict = {'coin': key, 'cc_blockcount': cc_blockcount, 'external': ext_blockcount,
-                              'xrouter': xrouter_blockcount, 'valid': valid}
-                    data_list.append(c_dict)
-                elif key != 'POLIS':
-                    if isinstance(xrouter_blockcount, int) and \
-                            xrouter_blockcount + block_tolerance >= cc_blockcount >= xrouter_blockcount - block_tolerance:
-                        valid = True
-                    elif not isinstance(xrouter_blockcount, int):
-                        valid = '?'
-                    c_dict = {'coin': key, 'cc_blockcount': cc_blockcount, 'external': None,
-                              'xrouter': xrouter_blockcount, 'valid': valid}
-                    data_list.append(c_dict)
-            else:
-                c_dict = {'coin': key, 'cc_blockcount': cc_blockcount, 'external': ext_blockcount,
-                          'xrouter': xrouter_blockcount, 'valid': False}
-                data_list.append(c_dict)
+    block_tolerance = 20
+    if config.cc_on:
+        print(time.time() - ccblockcounts_logger_timer, ccblockcounts_logger_loop_timer)
         if ignore_timer or ccblockcounts_logger_timer == 0 or \
                 time.time() - ccblockcounts_logger_timer > ccblockcounts_logger_loop_timer:
+            date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            print(date)
+            active_xlite_coins = ["BLOCK", "BTC", "DASH", "DOGE", "LTC", "PIVX", "SYS"]
+            print("check_cloudchains_blockcounts")
+            chainz_url = "https://chainz.cryptoid.info/explorer/api.dws?q=summary"
+            cc_url = 'https://plugin-api.core.cloudchainsinc.com/height'
+            xrouter_services = xb.xrGetNetworkServices(side='A')['spvwallets']
+            xrouter_services = [word.replace('xr::', '') for word in xrouter_services]
+            external = get_external_blockcounts()
+            try:
+                cc_blockcounts_dict = requests.get(cc_url).json()
+            except Exception as e:
+                blockcounts_error_logger.warn("cc_blockcounts_dict error:\n" + str(type(e)) + "\n" + str(e))
+                cc_blockcounts_dict = None
+            try:
+                chainz_summary = requests.get(chainz_url).json()
+            except Exception as e:
+                blockcounts_error_logger.warn("chainz_summary error:\n" + str(type(e)) + "\n" + str(e))
+                chainz_summary = None
+            data_list = []
+            for key in cc_blockcounts_dict['result']:
+                if key == "POLIS":
+                    continue
+                try:
+                    cc_blockcount = rpc_call(method="getblockcount", params=[key],
+                                             url="https://plugin-api.core.cloudchainsinc.com")['result']
+                    cc_blockcount = int(cc_blockcount)
+                except Exception as e:
+                    cc_blockcount = None
+                    blockcounts_error_logger.warn("cc_blockcount error:\n" + str(type(e)) + "\n" + str(e))
+                try:
+                    if key in xrouter_services:
+                        xrouter_blockcount = int(xb.xrGetBlockCount(side="A", coin=key, node_count=3))
+                    if xrouter_blockcount == 0:
+                        xrouter_blockcount = None
+                except Exception as e:
+                    blockcounts_error_logger.warn("xrouter_blockcount error:\n" + str(type(e)) + "\n" + str(e))
+                    xrouter_blockcount = None
+                external_bc = None
+                if chainz_summary and key.lower() in chainz_summary:
+                    external_bc = chainz_summary[key.lower()]['height']
+                elif key.lower() in external and external[key.lower()]:
+                    external_bc = external[key.lower()]
+                valid = False
+                if isinstance(cc_blockcount, int):
+                    if isinstance(external_bc, int):
+                        if external_bc + block_tolerance >= cc_blockcount >= external_bc - block_tolerance:
+                            valid = True
+                    if not valid and isinstance(xrouter_blockcount, int):
+                        if xrouter_blockcount + block_tolerance >= cc_blockcount >= xrouter_blockcount - block_tolerance:
+                            valid = True
+                    if not valid and not isinstance(external_bc, int) and not isinstance(xrouter_blockcount, int):
+                        valid = '?'
+                c_dict = {'coin': key, 'cc_blockcount': cc_blockcount, 'external': external_bc,
+                          'xrouter': xrouter_blockcount, 'valid': valid}
+                data_list.append(c_dict)
+
+            # PRINT & BUILD LIST TO MAIL
             msg = f"{' coin':<7} | {'cc_height':<9} | {'external':<9} | {'xrouter':<9} | {'valid'}"
             blockcounts_logger.info(msg)
             blockcounts_logger.info('-' * 60)
@@ -644,35 +626,45 @@ def check_cloudchains_blockcounts(ignore_timer=False):
             for each in sorted(data_list, key=lambda k: k['coin']):
                 msg = f"{' ' + each['coin']:<7} | {str(each['cc_blockcount']):<9} | {str(each['external']):<9} | {str(each['xrouter']):<9} | {each['valid']}"
                 blockcounts_logger.info(msg)
-                if each['valid'] is False and each['coin'] in active_xlite_coin:
+                if each['valid'] is False and each['coin'] in active_xlite_coins:
                     if str_coins != "":
                         str_coins = str_coins + ', '
                     list_to_mail.append(each)
                     str_coins = str_coins + each['coin']
             ccblockcounts_logger_timer = time.time()
-            if config.email_send:
+            # exit()
+            if config.email_send and len(list_to_mail) > 0:
+                print(str_coins, '\n', list_to_mail)
                 try:
                     with open('last_email.pic', 'rb') as fp:
                         last_email_date = pickle.load(fp)
                 except Exception as e:
-                    print("send_email", type(e), e)
+                    # print("send_email", type(e), e)
+                    blockcounts_error_logger.warn("last_email.pic file error:\n" + str(type(e)) + "\n" + str(e))
                     last_email_date = None
                     diff_date = None
                 else:
                     diff_date = datetime.now() - last_email_date
                     # print("diff_date:", diff_date.total_seconds())
-                # print(type(last_email_date), last_email_date)
-                if len(list_to_mail) > 0 and \
-                        last_email_date is None or \
-                        diff_date and diff_date.total_seconds() > ccblockcounts_mail_delay:
+                # print(type(last_email_date), last_email_date, diff_date.total_seconds())
+
+                if last_email_date is None or diff_date and diff_date.total_seconds() > ccblockcounts_mail_delay:
                     try:
-                        s_em = send_email(subject="Cloudchains API Monitoring alert: " + str_coins,
-                                          text="\n".join(str(x) for x in list_to_mail))
+                        s_em = send_email(subject="CC API Monitoring alert: " + str_coins,
+                                          text="\n".join(str(x) for x in list_to_mail),
+                                          destination=config.mail_destination)
+                        s_em2 = send_email(subject="CC API Monitoring alert: " + str_coins,
+                                           text="\n".join(str(x) for x in list_to_mail),
+                                           destination=config.mail_destination2)
                     except Exception as e:
-                        print("send_email", type(e), e)
-                    blockcounts_logger.warn("CC coins fails: " + str_coins + ", sending alert mail :" + str(s_em))
+                        # print("send_email", type(e), e)
+                        blockcounts_error_logger.warn("send_email error:\n" + str(type(e)) + "\n" + str(e))
+                    blockcounts_logger.warn(
+                        "CC coins fails: " + str_coins + ", sending alert mail :" + str(s_em) + ", " + str(s_em2))
                     with open('last_email.pic', 'wb') as fp:
                         pickle.dump(datetime.now(), fp)
+                else:
+                    blockcounts_logger.warn("CC coins fails: " + str_coins + ", already sent mail in last hour")
         # exit()
 
 
@@ -754,13 +746,13 @@ def get_xbp2p_logs(start_date, end_date, order_id="", status=""):
     os.remove(b_file)
 
 
-def send_email(subject="", text=""):
+def send_email(subject="", text="", destination=""):
     yag = yagmail.SMTP(config.mail_log, config.mail_pass)
     contents = [
         text
     ]
     try:
-        yag.send(config.mail_destination, subject, contents)
+        yag.send(destination, subject, contents)
     except Exception as error:
         print(type(error), error)
         return False
@@ -854,56 +846,57 @@ def exec_side(coin1, coin2, side):
                     print("in progress:", maker_side + ".maker_status:", [maker_order['status']],
                           taker_side + ".taker_status:", [taker_order['status']])
                     display_timer = time.time()
-                if "initialized" in taker_order['status']:
-                    if time.time() - taking_timer > max_delay_initialized:
-                        xb.cancelorder(maker_side, maker_order['id'])
-                        xb.cancelorder(taker_side, maker_order['id'])
-                        msg = taker_side + ".Taker status stuck on 'initialized', cancel " + maker_order['id']
+                if 'status' in taker_order:
+                    if "initialized" in taker_order['status']:
+                        if time.time() - taking_timer > max_delay_initialized:
+                            xb.cancelorder(maker_side, maker_order['id'])
+                            xb.cancelorder(taker_side, maker_order['id'])
+                            msg = taker_side + ".Taker status stuck on 'initialized', cancel " + maker_order['id']
+                            update_fee_count(taker_side)
+                            trade_logger.critical(msg)
+                            time.sleep(1)
+                            break
+                    elif "open" in taker_order['status']:
+                        fail_open_count += 1
+                        if fail_open_count == 3:
+                            xb.cancelorder(maker_side, maker_order['id'])
+                            e_msg = "open while taken,", maker_side + ".cancel " + maker_order['id']
+                            # print(msg)
+                            trade_logger.critical(e_msg)
+                            time.sleep(1)
+                            maker_order = xb.getorderstatus(maker_side, maker_order['id'])
+                            break
+                        time.sleep(0.5)
+                        xb.dxTakeOrder(taker_side, maker_order['id'], t_maker_address, t_taker_address)
+                        print(msg)
+                        time.sleep(0.5)
+                    elif "finished" in taker_order['status']:
+                        trade_counter += 1
+                        total_trade_time.append(time.time() - taking_timer)
+                        done = 1
                         update_fee_count(taker_side)
+                        # play_my_sound(sound1)
+                        # CC API CHECK
+                        # try:
+                        #     process = subprocess.Popen(['python3', 'cc-api-check/src/run.py'],
+                        #                                stdout=subprocess.DEVNULL,
+                        #                                stderr=subprocess.STDOUT)
+                        #     process.wait()
+                        # except Exception as e:
+                        #     print(e)
+                        # CC API CHECK
+                    elif check_status_fail(taker_order['status']):
+                        msg = "error with order: " + maker_order['id'] + ", " + taker_order[
+                            'status']
                         trade_logger.critical(msg)
-                        time.sleep(1)
-                        break
-                elif "open" in taker_order['status']:
-                    fail_open_count += 1
-                    if fail_open_count == 3:
-                        xb.cancelorder(maker_side, maker_order['id'])
-                        e_msg = "open while taken,", maker_side + ".cancel " + maker_order['id']
-                        # print(msg)
-                        trade_logger.critical(e_msg)
-                        time.sleep(1)
-                        maker_order = xb.getorderstatus(maker_side, maker_order['id'])
-                        break
-                    time.sleep(0.5)
-                    xb.dxTakeOrder(taker_side, maker_order['id'], t_maker_address, t_taker_address)
-                    print(msg)
-                    time.sleep(0.5)
-                elif "finished" in taker_order['status']:
-                    trade_counter += 1
-                    total_trade_time.append(time.time() - taking_timer)
-                    done = 1
-                    update_fee_count(taker_side)
-                    # play_my_sound(sound1)
-                    # CC API CHECK
-                    try:
-                        process = subprocess.Popen(['python3', 'cc-api-check/src/run.py'],
-                                                   stdout=subprocess.DEVNULL,
-                                                   stderr=subprocess.STDOUT)
-                        process.wait()
-                    except Exception as e:
-                        print(e)
-                    # CC API CHECK
-                elif check_status_fail(taker_order['status']):
-                    msg = "error with order: " + maker_order['id'] + ", " + taker_order[
-                        'status']
-                    trade_logger.critical(msg)
-                    update_fee_count(taker_side)
-                    end_date = datetime.now()
-                    try:
-                        get_xbp2p_logs(start_date, end_date, maker_order['id'],
-                                       taker_order['status'])
-                    except Exception as e:
-                        print(e)
-                    exit()
+                        update_fee_count(taker_side)
+                        end_date = datetime.now()
+                        try:
+                            get_xbp2p_logs(start_date, end_date, maker_order['id'],
+                                           taker_order['status'])
+                        except Exception as e:
+                            print(e)
+                        exit()
                 time.sleep(1)
                 taker_order = xb.getorderstatus(taker_side, maker_order['id'])
                 maker_order = xb.getorderstatus(maker_side, maker_order['id'])
@@ -939,16 +932,15 @@ def main():
     iteration = 0
     while 1:
         # CC API CHECK
-        try:
-            process = subprocess.Popen(['python3', 'cc-api-check/src/run.py'], stdout=subprocess.DEVNULL,
-                                       stderr=subprocess.STDOUT)
-            process.wait()
-        except Exception as e:
-            print("cc-api-check:", type(e), e)
+        # try:
+        #     process = subprocess.Popen(['python3', 'cc-api-check/src/run.py'], stdout=subprocess.DEVNULL,
+        #                                stderr=subprocess.STDOUT)
+        #     process.wait()
+        # except Exception as e:
+        #     print("cc-api-check:", type(e), e)
         # CC API CHECK
         iteration += 1
         # if iteration % 5 == 0 or iteration == 1:
-        check_cloudchains_blockcounts()
         if not flush_timer or time.time() - flush_timer > flush_delay:
             print("flushing canceled orders")
             xb.dxFlushCancelledOrders("A")
@@ -957,19 +949,18 @@ def main():
         random.shuffle(markets)
         for market in markets:
             cancel_all_open_orders()
+            check_cloudchains_blockcounts()
             org_trade_counter = trade_counter
             rand = random.randrange(0, 2)
             # FLIP PAIRS RANDOMLY!
             if rand == 1:
                 coin1 = market[1]
                 coin2 = market[0]
-                instance_A.get_addresses(coin1, coin2)
-                instance_B.get_addresses(coin1, coin2)
             else:
                 coin1 = market[0]
                 coin2 = market[1]
-                instance_A.get_addresses(coin1, coin2)
-                instance_B.get_addresses(coin1, coin2)
+            instance_A.get_addresses(coin1, coin2)
+            instance_B.get_addresses(coin1, coin2)
             usd_vol, usd_vol_s2 = get_pair_usd_volume(coin1, coin2)
             check_volume_print(coin1, coin2, usd_vol, usd_vol_s2, usd_volume_target)
             if usd_vol < usd_volume_target or test_mode:
@@ -983,7 +974,7 @@ def main():
                         check_s1 = check_side_bal('side1', coin1, coin2)
                         check_s2 = check_side_bal('side2', coin1, coin2)
                         if check_s1 and check_s2:
-                            if config.fee_to_burn['A'] > config.fee_to_burn['B'] and random.randrange(0, 2) == 1:
+                            if config.fee_to_burn['A'] > config.fee_to_burn['B']:  # and random.randrange(0, 2) == 1:
                                 check_s1 = False
                                 print("check_s1 modifier => false")
                         print("order_data_bol:\n   ", order_data_bol, "check_side_bal('side1')", check_s1,

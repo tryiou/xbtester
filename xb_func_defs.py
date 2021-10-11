@@ -31,6 +31,7 @@ def xrGetBlockCount(side, coin, node_count=1):
     count = 0
     result = None
     max_count = 2
+    org_node_count = node_count
     while not done:
         count += 1
         if count == max_count:

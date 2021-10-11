@@ -114,7 +114,9 @@ def getopenordersbymaker(maker):
 def getopenorders():
     # return open orders
     myorders = rpc_connection.dxGetMyOrders()
-    return [zz for zz in myorders if (zz['status'] == "open" or zz['status'] == "new")]
+    return [zz for zz in myorders if
+            (zz['status'] == "open" or zz['status'] == "new" or zz['status'] == "initialized" or
+             zz['status'] == 'hold')]
 
 
 def getopenorder_ids():
