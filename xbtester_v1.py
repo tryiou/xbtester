@@ -104,7 +104,7 @@ taker_order = None
 order_price = None
 coin1coin2_cexprice = None
 flush_timer = None
-max_delay_initialized = 120
+max_delay_initialized = 60 * 15
 
 
 def dx_settings_save_new_address(coin, address, side):
@@ -207,11 +207,17 @@ def get_pair_usd_volume(c1, c2):
         coin1_r = cex_get_btc_rate_from_orderbook(c1)
     else:
         coin1_r_usd = scrap_price_cmc(c1)
+        if coin1_r_usd is None:
+            print("get_pair_usd_volume, coin1_r_usd is None", c1 + "/BTC")
+            return None, None
         coin1_r = coin1_r_usd / btcusd_r
     if c2 + "/BTC" in ccxt_bittrex.symbols:
         coin2_r = cex_get_btc_rate_from_orderbook(c2)
     else:
         coin2_r_usd = scrap_price_cmc(c2)
+        if coin2_r_usd is None:
+            print("get_pair_usd_volume, coin2_r_usd is None", c2 + "/BTC")
+            return None, None
         coin2_r = coin2_r_usd / btcusd_r
     res = xb.dxgetorderfills("A", c1, c2, True)
 
@@ -382,16 +388,22 @@ def calc_order_data(coin1, coin2):
     taker_amount = None
     order_price = None
     btcusd_r = cex_get_btc_rate_from_orderbook("USD")
-    if coin1 != 'DASH':
-        coin1_rate = cex_get_btc_rate_from_orderbook(coin1)
-    else:
+    if coin1 == 'DASH':
         coin1_r_usd = scrap_price_cmc(coin1)
+        if coin1_r_usd is None:
+            print("calc_order_data, coin1_r_usd is None")
+            return False
         coin1_rate = coin1_r_usd / btcusd_r
-    if coin2 != 'DASH':
-        coin2_rate = cex_get_btc_rate_from_orderbook(coin2)
     else:
+        coin1_rate = cex_get_btc_rate_from_orderbook(coin1)
+    if coin2 == 'DASH':
         coin2_r_usd = scrap_price_cmc(coin2)
+        if coin2_r_usd is None:
+            print("calc_order_data, coin2_r_usd is None")
+            return False
         coin2_rate = coin2_r_usd / btcusd_r
+    else:
+        coin2_rate = cex_get_btc_rate_from_orderbook(coin2)
     coin1coin2_cexprice = coin1_rate / coin2_rate
     order_price = coin1coin2_cexprice * random.uniform((1 + price_multi - 0.02), (1 + price_multi + 0.02))
     instance_A_bal_c1 = float(instance_A.balances[coin1])
@@ -433,7 +445,7 @@ def calc_order_data(coin1, coin2):
                     return True
                 else:
                     print("  ", instance_B.side, "bal.c2", coin2, "too low:", instance_B.balances[coin2], taker_amount)
-                    if instance_B_bal_c2 > size_min[coin2]:
+                    if instance_B_bal_c2 * 0.97 > size_min[coin2]:
                         org_maker = maker_amount
                         org_taker = taker_amount
                         new_amount = instance_B_bal_c2 * 0.97
@@ -456,7 +468,7 @@ def calc_order_data(coin1, coin2):
                     return True
                 else:
                     print("  ", instance_A.side, "bal.c2", coin2, "too low:", instance_A.balances[coin2], taker_amount)
-                    if instance_A_bal_c2 > size_min[coin2]:
+                    if instance_A_bal_c2 * 0.97 > size_min[coin2]:
                         org_maker = maker_amount
                         org_taker = taker_amount
                         new_amount = instance_A_bal_c2 * 0.97
@@ -504,8 +516,6 @@ def scrap_price_cmc(coin):
     else:
         price = None
         print("error with separators")
-        exit()
-    print(price)
     return price
 
 
@@ -588,6 +598,7 @@ def check_cloudchains_blockcounts(ignore_timer=False):
                                              url="https://plugin-api.core.cloudchainsinc.com")['result']
                     cc_blockcount = int(cc_blockcount)
                 except Exception as e:
+                    # cc_blockcount = None
                     cc_blockcount = None
                     blockcounts_error_logger.warn("cc_blockcount error:\n" + str(type(e)) + "\n" + str(e))
                 try:
@@ -761,28 +772,28 @@ def send_email(subject="", text="", destination=""):
 
 
 def check_volume_print(coin1, coin2, usd_vol, usd_vol_s2, usd_volume_target):
-    if usd_vol > usd_volume_target:
-        print(datetime.now().strftime('%Y-%m-%d_%H:%M:%S'), "| 24H USD Volume on", coin1 + "/" + coin2 + ":",
-              usd_vol, usd_vol_s2, "| target:", usd_volume_target, "reached.\n")
+    print(datetime.now().strftime('%Y-%m-%d_%H:%M:%S'), "| 24H USD Volume on", coin1 + "/" + coin2 + ":",
+          usd_vol, usd_vol_s2, "| target:", usd_volume_target, end="")
+    if usd_vol and usd_vol > usd_volume_target:
+        print(", reached.\n")
     else:
-        print(datetime.now().strftime('%Y-%m-%d_%H:%M:%S'), "| 24H USD Volume on", coin1 + "/" + coin2 + ":",
-              usd_vol, usd_vol_s2, "| target:", usd_volume_target, "in progress.")
+        print(", in progress.")
 
 
 # def play_my_sound(sound):
 #     play(sound)
 
 def exec_side(coin1, coin2, side):
-    # side s1 s2
-    # s1, A make order B take order
-    # s2, B make order A taker order
+    # side side1 side2
+    # side1, A make order B take order
+    # side2, B make order A taker order
     global trade_counter, maker_order, taker_order
     start_date = datetime.now() - time_delta
     print("exec_side(", coin1, coin2, side, ")")
-    if side == 's1':
+    if side == 'side1':
         maker_side = "A"
         taker_side = "B"
-    elif side == 's2':
+    elif side == 'side2':
         maker_side = "B"
         taker_side = "A"
     else:
@@ -918,9 +929,8 @@ def exec_side(coin1, coin2, side):
 
 
 def main():
-    global trade_counter, flush_timer
+    global trade_counter, flush_timer, ccblockcounts_logger_timer
     fail_count = 0
-
     try:
         print("dxloadxbridgeconf A:", xb.dxloadxbridgeconf("A"))
         print("getnetworkinfo A:\n", xb.getnetworkinfo("A"))
@@ -930,6 +940,7 @@ def main():
         print(e)
         exit()
     iteration = 0
+    ccblockcounts_logger_timer = time.time()
     while 1:
         # CC API CHECK
         # try:
@@ -963,7 +974,7 @@ def main():
             instance_B.get_addresses(coin1, coin2)
             usd_vol, usd_vol_s2 = get_pair_usd_volume(coin1, coin2)
             check_volume_print(coin1, coin2, usd_vol, usd_vol_s2, usd_volume_target)
-            if usd_vol < usd_volume_target or test_mode:
+            if usd_vol is not None and usd_vol < usd_volume_target or test_mode:
                 # print("rand:", rand, coin1 + "/" + coin2, "usd_vol:", usd_vol, "usd_vol_s2:", usd_vol_s2, "target:",
                 #       usd_volume_target)
                 update_dex_bals()
@@ -980,9 +991,9 @@ def main():
                         print("order_data_bol:\n   ", order_data_bol, "check_side_bal('side1')", check_s1,
                               "check_side_bal('side2')", check_s2)
                         if check_s1:
-                            exec_side(coin1, coin2, side="s1")
+                            exec_side(coin1, coin2, side="side1")
                         elif check_s2:
-                            exec_side(coin1, coin2, side="s2")
+                            exec_side(coin1, coin2, side="side2")
                     else:
                         print("order_data_bol", order_data_bol)
                 else:
@@ -1016,7 +1027,6 @@ def main():
                     usd_vol, usd_vol_s2 = get_pair_usd_volume(coin1, coin2)
                     check_volume_print(coin1, coin2, usd_vol, usd_vol_s2, usd_volume_target)
                     print()
-
         print("***loop_done***")
         # time.sleep(10)
         print("")

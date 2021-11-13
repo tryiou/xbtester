@@ -34,8 +34,8 @@ def init_ccxt_instance(exchange, hostname=None):
 
 
 def ccxt_manage_error(error, err_count=1):
-    print(type(error), error)
     err_type = type(error).__name__
+    print(type(error), error, err_type)
     if (err_type == "NetworkError" or
             err_type == "DDoSProtection" or
             err_type == "RateLimitExceeded" or
